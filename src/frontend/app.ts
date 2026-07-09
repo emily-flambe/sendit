@@ -336,14 +336,6 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
     </header>
     <main class="form-page">
       <form id="route-form">
-        <label>Color
-          <div class="swatches">${colorChips}</div>
-          <input name="color" placeholder="or type one" value="${esc(route?.color ?? '')}" />
-        </label>
-        <label>Grade
-          <div class="chips" id="grade-chips"></div>
-          <input name="grade" placeholder="V4, 5.11, comp tag…" value="${esc(route?.grade ?? '')}" />
-        </label>
         <label>Discipline
           <select name="discipline">
             ${(Object.keys(DISCIPLINE_LABELS) as Discipline[])
@@ -353,6 +345,14 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
               )
               .join('')}
           </select>
+        </label>
+        <label>Color
+          <div class="swatches">${colorChips}</div>
+          <input name="color" placeholder="or type one" value="${esc(route?.color ?? '')}" />
+        </label>
+        <label>Grade
+          <div class="chips" id="grade-chips"></div>
+          <input name="grade" placeholder="V4, 5.11, comp tag…" value="${esc(route?.grade ?? '')}" />
         </label>
         <label>Wall / area
           <input name="wall" placeholder="Overhang, slab wall, cave…" value="${esc(route?.wall ?? '')}" />
@@ -372,7 +372,6 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
   const form = document.getElementById('route-form') as HTMLFormElement;
   const colorInput = form.querySelector<HTMLInputElement>('input[name=color]')!;
   const gradeInput = form.querySelector<HTMLInputElement>('input[name=grade]')!;
-  const disciplineSelect = form.querySelector<HTMLSelectElement>('select[name=discipline]')!;
 
   form.querySelectorAll<HTMLButtonElement>('.swatch').forEach((btn) =>
     btn.addEventListener('click', () => {
@@ -381,6 +380,8 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
       btn.classList.add('active');
     })
   );
+
+  const disciplineSelect = form.querySelector<HTMLSelectElement>('select[name=discipline]')!;
 
   function renderGradeChips(): void {
     const grades = disciplineSelect.value === 'boulder' ? BOULDER_GRADES : ROPE_GRADES;
