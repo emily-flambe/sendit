@@ -61,7 +61,22 @@ const DISCIPLINE_LABELS: Record<Discipline, string> = {
 };
 
 const BOULDER_GRADES = ['VB', 'V0', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8'];
-const ROPE_GRADES = ['5.8', '5.9', '5.10', '5.10+', '5.11', '5.11+', '5.12', '5.12+'];
+const ROPE_GRADES = [
+  '5.8',
+  '5.9',
+  '5.10a',
+  '5.10b',
+  '5.10c',
+  '5.10d',
+  '5.11a',
+  '5.11b',
+  '5.11c',
+  '5.11d',
+  '5.12a',
+  '5.12b',
+  '5.12c',
+  '5.12d',
+];
 
 function todayStr(): string {
   const d = new Date();
