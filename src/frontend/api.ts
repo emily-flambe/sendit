@@ -1,0 +1,120 @@
+const TOKEN_KEY = 'sendit_token';
+
+export interface User {
+  id: string;
+  username: string;
+  created_at: number;
+}
+
+export interface Gym {
+  id: string;
+  name: string;
+  notes: string;
+  archived: number;
+  created_at: number;
+}
+
+export type Discipline = 'boulder' | 'top_rope' | 'lead' | 'autobelay';
+export type AttemptResult = 'send' | 'attempt';
+
+export interface Route {
+  id: string;
+  gym_id: string;
+  name: string;
+  grade: string;
+  color: string;
+  wall: string;
+  discipline: Discipline;
+  notes: string;
+  archived: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface RouteWithStats extends Route {
+  attempt_count: number;
+  send_count: number;
+  last_attempted_on: string | null;
+}
+
+export interface Attempt {
+  id: string;
+  route_id: string;
+  attempted_on: string;
+  result: AttemptResult;
+  high_point: string;
+  notes: string;
+  created_at: number;
+}
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string | null): void {
+  if (token) {
+    localStorage.setItem(TOKEN_KEY, token);
+  } else {
+    localStorage.removeItem(TOKEN_KEY);
+  }
+}
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+
+  const res = await fetch(`/api${path}`, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+
+  if (res.status === 401 && path !== '/auth/login') {
+    setToken(null);
+    window.location.hash = '#/login';
+  }
+
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    throw new ApiError(res.status, typeof data.error === 'string' ? data.error : 'Something went wrong');
+  }
+  return data as T;
+}
+
+export const api = {
+  register: (username: string, password: string) =>
+    request<{ token: string; user: User }>('POST', '/auth/register', { username, password }),
+  login: (username: string, password: string) =>
+    request<{ token: string; user: User }>('POST', '/auth/login', { username, password }),
+  me: () => request<{ user: User }>('GET', '/auth/me'),
+
+  listGyms: (includeArchived = false) =>
+    request<{ gyms: Gym[] }>('GET', `/gyms${includeArchived ? '?archived=1' : ''}`),
+  createGym: (name: string, notes = '') => request<{ gym: Gym }>('POST', '/gyms', { name, notes }),
+  updateGym: (id: string, fields: Partial<Pick<Gym, 'name' | 'notes' | 'archived'>>) =>
+    request<{ gym: Gym }>('PATCH', `/gyms/${id}`, fields),
+
+  listRoutes: (gymId: string, includeArchived = false) =>
+    request<{ routes: RouteWithStats[] }>('GET', `/gyms/${gymId}/routes${includeArchived ? '?archived=1' : ''}`),
+  createRoute: (gymId: string, fields: Partial<Route>) =>
+    request<{ route: Route }>('POST', `/gyms/${gymId}/routes`, fields),
+  getRoute: (id: string) => request<{ route: Route; attempts: Attempt[] }>('GET', `/routes/${id}`),
+  updateRoute: (id: string, fields: Partial<Route>) => request<{ route: Route }>('PATCH', `/routes/${id}`, fields),
+  deleteRoute: (id: string) => request<{ success: boolean }>('DELETE', `/routes/${id}`),
+
+  createAttempt: (routeId: string, fields: { attempted_on: string; result: AttemptResult; high_point?: string; notes?: string }) =>
+    request<{ attempt: Attempt }>('POST', `/routes/${routeId}/attempts`, fields),
+  updateAttempt: (id: string, fields: Partial<Pick<Attempt, 'attempted_on' | 'result' | 'high_point' | 'notes'>>) =>
+    request<{ attempt: Attempt }>('PATCH', `/attempts/${id}`, fields),
+  deleteAttempt: (id: string) => request<{ success: boolean }>('DELETE', `/attempts/${id}`),
+};
