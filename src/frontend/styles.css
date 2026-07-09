@@ -402,6 +402,11 @@ input[type='radio'] {
   padding-bottom: 2px;
 }
 
+/* YDS letter grades are lowercase (5.10a, not 5.10A) */
+.chips .chip {
+  text-transform: none;
+}
+
 .swatch {
   width: 34px;
   height: 34px;
