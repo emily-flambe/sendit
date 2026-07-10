@@ -52,9 +52,10 @@ function colorHex(color: string): string {
   return '#6b665f';
 }
 
+// Key order drives select-option order; top rope is the default discipline.
 const DISCIPLINE_LABELS: Record<Discipline, string> = {
-  boulder: 'Boulder',
   top_rope: 'Top rope',
+  boulder: 'Boulder',
   lead: 'Lead',
   autobelay: 'Auto belay',
 };
@@ -481,7 +482,7 @@ async function renderLogNew(): Promise<void> {
           </label>
           <label>Color
             <div class="swatches">${colorChips}</div>
-            <input name="color" placeholder="or type one" />
+            <input type="hidden" name="color" />
           </label>
           <label>Grade
             <div class="chips" id="grade-chips"></div>
@@ -516,9 +517,10 @@ async function renderLogNew(): Promise<void> {
 
   form.querySelectorAll<HTMLButtonElement>('.swatch').forEach((btn) =>
     btn.addEventListener('click', () => {
-      colorInput.value = btn.dataset.color ?? '';
+      const wasActive = btn.classList.contains('active');
       form.querySelectorAll('.swatch').forEach((s) => s.classList.remove('active'));
-      btn.classList.add('active');
+      colorInput.value = wasActive ? '' : (btn.dataset.color ?? '');
+      if (!wasActive) btn.classList.add('active');
     })
   );
 
@@ -750,7 +752,7 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
         </label>
         <label>Color
           <div class="swatches">${colorChips}</div>
-          <input name="color" placeholder="or type one" value="${esc(route?.color ?? '')}" />
+          <input type="hidden" name="color" value="${esc(route?.color ?? '')}" />
         </label>
         <label>Grade
           <div class="chips" id="grade-chips"></div>
@@ -777,9 +779,10 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
 
   form.querySelectorAll<HTMLButtonElement>('.swatch').forEach((btn) =>
     btn.addEventListener('click', () => {
-      colorInput.value = btn.dataset.color ?? '';
+      const wasActive = btn.classList.contains('active');
       form.querySelectorAll('.swatch').forEach((s) => s.classList.remove('active'));
-      btn.classList.add('active');
+      colorInput.value = wasActive ? '' : (btn.dataset.color ?? '');
+      if (!wasActive) btn.classList.add('active');
     })
   );
 
