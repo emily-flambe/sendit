@@ -156,19 +156,21 @@ export async function updateRoute(
   db: D1Database,
   userId: string,
   routeId: string,
-  fields: Partial<RouteInput> & { archived?: number }
+  fields: Partial<RouteInput> & { archived?: number; gym_id?: string }
 ): Promise<Route | null> {
   const existing = await getRoute(db, userId, routeId);
   if (!existing) return null;
 
+  // Callers must verify a new gym_id belongs to this user before passing it.
   const next = { ...existing, ...fields, updated_at: Date.now() };
   await db
     .prepare(
       `UPDATE routes
-       SET name = ?, grade = ?, color = ?, wall = ?, discipline = ?, notes = ?, archived = ?, updated_at = ?
+       SET gym_id = ?, name = ?, grade = ?, color = ?, wall = ?, discipline = ?, notes = ?, archived = ?, updated_at = ?
        WHERE id = ?`
     )
     .bind(
+      next.gym_id,
       next.name,
       next.grade,
       next.color,
@@ -331,4 +333,62 @@ export async function createPhoto(
 
 export async function deletePhoto(db: D1Database, photoId: string): Promise<void> {
   await db.prepare('DELETE FROM route_photos WHERE id = ?').bind(photoId).run();
+}
+
+export async function listAllRoutes(
+  db: D1Database,
+  userId: string,
+  includeArchived: boolean
+): Promise<(RouteWithStats & { gym_name: string })[]> {
+  const archivedClause = includeArchived ? '' : 'AND r.archived = 0';
+  const result = await db
+    .prepare(
+      `SELECT r.*,
+              g.name AS gym_name,
+              COUNT(a.id) AS attempt_count,
+              COALESCE(SUM(a.result = 'send'), 0) AS send_count,
+              MAX(a.attempted_on) AS last_attempted_on,
+              (SELECT COUNT(*) FROM route_photos p WHERE p.route_id = r.id) AS photo_count,
+              (SELECT p.id FROM route_photos p WHERE p.route_id = r.id ORDER BY p.created_at LIMIT 1) AS first_photo_id
+       FROM routes r
+       JOIN gyms g ON g.id = r.gym_id
+       LEFT JOIN attempts a ON a.route_id = r.id
+       WHERE g.user_id = ? ${archivedClause}
+       GROUP BY r.id
+       ORDER BY r.created_at DESC`
+    )
+    .bind(userId)
+    .all<RouteWithStats & { gym_name: string }>();
+  return result.results;
+}
+
+export interface LogEntry extends Attempt {
+  gym_id: string;
+  route_name: string;
+  route_grade: string;
+  route_color: string;
+  route_discipline: Route['discipline'];
+  gym_name: string;
+}
+
+export async function listLog(db: D1Database, userId: string, limit = 100): Promise<LogEntry[]> {
+  const result = await db
+    .prepare(
+      `SELECT a.*,
+              r.name AS route_name,
+              r.grade AS route_grade,
+              r.color AS route_color,
+              r.discipline AS route_discipline,
+              g.id AS gym_id,
+              g.name AS gym_name
+       FROM attempts a
+       JOIN routes r ON r.id = a.route_id
+       JOIN gyms g ON g.id = r.gym_id
+       WHERE g.user_id = ?
+       ORDER BY a.attempted_on DESC, a.created_at DESC
+       LIMIT ?`
+    )
+    .bind(userId, limit)
+    .all<LogEntry>();
+  return result.results;
 }

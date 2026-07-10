@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Env } from '../types';
 import * as queries from '../db/queries';
 import { authMiddleware } from '../middleware/auth';
+import { defaultRouteName } from './routes';
 
 const gymSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -73,6 +74,9 @@ gyms.post('/:id/routes', async (c) => {
   const parsed = routeSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {
     return c.json({ error: 'Invalid route fields' }, 400);
+  }
+  if (!parsed.data.name) {
+    parsed.data.name = defaultRouteName(parsed.data.color, parsed.data.grade);
   }
   const route = await queries.createRoute(c.env.DB, gym.id, parsed.data);
   return c.json({ route }, 201);
