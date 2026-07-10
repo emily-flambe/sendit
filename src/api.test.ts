@@ -325,3 +325,66 @@ describe('route photos', () => {
     expect(await env.PHOTOS.get(key)).toBeNull();
   });
 });
+
+describe('cross-gym listing and log feed', () => {
+  let token: string;
+  let gymA: string;
+  let gymB: string;
+
+  beforeAll(async () => {
+    token = await registerUser('multigym');
+    gymA = (await call('POST', '/api/gyms', { name: 'Gym A' }, token)).data.gym.id;
+    gymB = (await call('POST', '/api/gyms', { name: 'Gym B' }, token)).data.gym.id;
+  });
+
+  it('lists routes across all gyms with gym names', async () => {
+    await call('POST', `/api/gyms/${gymA}/routes`, { grade: 'V1', color: 'red' }, token);
+    await call('POST', `/api/gyms/${gymB}/routes`, { grade: '5.10a', color: 'blue' }, token);
+
+    const list = await call('GET', '/api/routes', undefined, token);
+    expect(list.status).toBe(200);
+    const names = list.data.routes.map((r: Json) => r.gym_name).sort();
+    expect(names).toContain('Gym A');
+    expect(names).toContain('Gym B');
+  });
+
+  it('returns a log feed with route and gym context', async () => {
+    const route = await call('POST', `/api/gyms/${gymA}/routes`, { grade: 'V3', color: 'green' }, token);
+    await call(
+      'POST',
+      `/api/routes/${route.data.route.id}/attempts`,
+      { attempted_on: '2026-07-10', result: 'send' },
+      token
+    );
+
+    const log = await call('GET', '/api/attempts', undefined, token);
+    expect(log.status).toBe(200);
+    const entry = log.data.entries.find((e: Json) => e.route_id === route.data.route.id);
+    expect(entry.gym_id).toBe(gymA);
+    expect(entry.gym_name).toBe('Gym A');
+    expect(entry.route_grade).toBe('V3');
+    expect(entry.result).toBe('send');
+  });
+
+  it('generates a name when none is given', async () => {
+    const route = await call('POST', `/api/gyms/${gymA}/routes`, { grade: 'V4', color: 'pink' }, token);
+    expect(route.data.route.name).toMatch(/^pink V4 added on \d{4}-\d{2}-\d{2}$/);
+
+    const named = await call('POST', `/api/gyms/${gymA}/routes`, { name: 'Slopey Nonsense', grade: 'V2' }, token);
+    expect(named.data.route.name).toBe('Slopey Nonsense');
+  });
+
+  it('moves a route between gyms but only into your own gym', async () => {
+    const route = await call('POST', `/api/gyms/${gymA}/routes`, { grade: 'V5' }, token);
+    const routeId = route.data.route.id as string;
+
+    const moved = await call('PATCH', `/api/routes/${routeId}`, { gym_id: gymB }, token);
+    expect(moved.status).toBe(200);
+    expect(moved.data.route.gym_id).toBe(gymB);
+
+    const stranger = await registerUser('gym-thief');
+    const strangersGym = (await call('POST', '/api/gyms', { name: 'Not Yours' }, stranger)).data.gym.id;
+    const steal = await call('PATCH', `/api/routes/${routeId}`, { gym_id: strangersGym }, token);
+    expect(steal.status).toBe(404);
+  });
+});

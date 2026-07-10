@@ -15,6 +15,11 @@ const attempts = new Hono<{ Bindings: Env }>();
 
 attempts.use('*', authMiddleware);
 
+attempts.get('/', async (c) => {
+  const entries = await queries.listLog(c.env.DB, c.get('userId'));
+  return c.json({ entries });
+});
+
 attempts.patch('/:id', async (c) => {
   const parsed = attemptPatchSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {

@@ -39,6 +39,26 @@ export interface RouteWithStats extends Route {
   first_photo_id: string | null;
 }
 
+export interface RouteWithGym extends RouteWithStats {
+  gym_name: string;
+}
+
+export interface LogEntry {
+  id: string;
+  route_id: string;
+  gym_id: string;
+  attempted_on: string;
+  result: AttemptResult;
+  high_point: string;
+  notes: string;
+  created_at: number;
+  route_name: string;
+  route_grade: string;
+  route_color: string;
+  route_discipline: Discipline;
+  gym_name: string;
+}
+
 export interface RoutePhoto {
   id: string;
   route_id: string;
@@ -116,6 +136,9 @@ export const api = {
 
   listRoutes: (gymId: string, includeArchived = false) =>
     request<{ routes: RouteWithStats[] }>('GET', `/gyms/${gymId}/routes${includeArchived ? '?archived=1' : ''}`),
+  listAllRoutes: (includeArchived = false) =>
+    request<{ routes: RouteWithGym[] }>('GET', `/routes${includeArchived ? '?archived=1' : ''}`),
+  listLog: () => request<{ entries: LogEntry[] }>('GET', '/attempts'),
   createRoute: (gymId: string, fields: Partial<Route>) =>
     request<{ route: Route }>('POST', `/gyms/${gymId}/routes`, fields),
   getRoute: (id: string) =>

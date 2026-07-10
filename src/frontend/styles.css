@@ -858,3 +858,54 @@ input[type='radio'] {
   align-items: center;
   gap: 20px;
 }
+
+/* log page + filter bar */
+
+.big-log {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+  font-family: var(--display);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 16px;
+}
+
+.filter-bar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.filter-bar select {
+  width: 100%;
+  background: var(--panel);
+  color: var(--chalk);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: var(--body);
+  font-size: 14px;
+}
+
+.log-entry .attempt-result {
+  flex-shrink: 0;
+}
+
+.attempt-result.is-send {
+  color: var(--green);
+}
+
+#new-route-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+}
+
+#new-route-fields.hidden {
+  display: none;
+}

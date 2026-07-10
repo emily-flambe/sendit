@@ -6,18 +6,16 @@ import {
   type Attempt,
   type Discipline,
   type Gym,
+  type LogEntry,
   type RoutePhoto,
-  type RouteWithStats,
+  type RouteWithGym,
   type Route,
 } from './api';
 
 const GYM_KEY = 'sendit_gym';
 
-type Filter = 'all' | 'new' | 'project' | 'sent' | 'archived';
-
 let gyms: Gym[] = [];
 let activeGymId: string | null = localStorage.getItem(GYM_KEY);
-let filter: Filter = 'all';
 
 const appEl = document.getElementById('app')!;
 
@@ -97,16 +95,35 @@ function recency(dateStr: string | null): string {
   return `${Math.floor(days / 365)}y ago`;
 }
 
-function routeState(r: RouteWithStats): 'sent' | 'project' | 'new' {
+type RouteState = 'sent' | 'project' | 'new';
+
+const STATE_LABELS: Record<RouteState, string> = {
+  sent: 'sent',
+  project: 'in progress',
+  new: 'not tried',
+};
+
+function routeState(r: { send_count: number; attempt_count: number }): RouteState {
   if (r.send_count > 0) return 'sent';
   if (r.attempt_count > 0) return 'project';
   return 'new';
 }
 
-function routeTitle(r: Route): string {
+function routeTitle(r: { name: string; color: string; grade: string }): string {
   if (r.name) return r.name;
   const bits = [r.color, r.grade].filter(Boolean).join(' ');
   return bits || 'Unnamed route';
+}
+
+// Rank grades so mixed freetext sorts sensibly: V-scale together, YDS
+// together, anything unparseable at the easy end.
+function gradeRank(grade: string): number {
+  const g = grade.trim().toUpperCase();
+  const v = g.match(/^V(B|\d+)/);
+  if (v) return 100 + (v[1] === 'B' ? -1 : Number(v[1]));
+  const yds = g.match(/^5\.(\d+)([A-D])?/);
+  if (yds) return 200 + Number(yds[1]) * 5 + (yds[2] ? yds[2].charCodeAt(0) - 64 : 0);
+  return -1;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -214,10 +231,6 @@ function openLightbox(photo: RoutePhoto, onDelete: () => void): void {
   });
 }
 
-function activeGym(): Gym | null {
-  return gyms.find((g) => g.id === activeGymId) ?? null;
-}
-
 function setActiveGym(id: string | null): void {
   activeGymId = id;
   if (id) {
@@ -229,19 +242,66 @@ function setActiveGym(id: string | null): void {
 
 async function loadGyms(): Promise<void> {
   gyms = (await api.listGyms()).gyms;
-  if (!activeGym() && gyms.length > 0) {
+  if (!gyms.some((g) => g.id === activeGymId) && gyms.length > 0) {
     setActiveGym(gyms[0].id);
   }
 }
 
+// ---------- filters ----------
+
+interface ListFilters {
+  gym: string;
+  discipline: string;
+  status: string;
+  sort: string;
+}
+
+const logFilters: ListFilters = { gym: 'all', discipline: 'all', status: 'all', sort: 'newest' };
+const routeFilters: ListFilters = { gym: 'all', discipline: 'all', status: 'active', sort: 'recent' };
+
+type Options = [string, string][];
+
+function filterBar(f: ListFilters, statusOptions: Options, sortOptions: Options): string {
+  const selects: [keyof ListFilters, Options][] = [
+    ['gym', [['all', 'All gyms'], ...gyms.map((g): [string, string] => [g.id, g.name])]],
+    ['discipline', [['all', 'All types'], ...(Object.entries(DISCIPLINE_LABELS) as Options)]],
+    ['status', statusOptions],
+    ['sort', sortOptions],
+  ];
+  return `<div class="filter-bar">
+    ${selects
+      .map(
+        ([key, options]) => `<select data-f="${key}" aria-label="${key}">
+          ${options
+            .map(([value, label]) => `<option value="${esc(value)}" ${f[key] === value ? 'selected' : ''}>${esc(label)}</option>`)
+            .join('')}
+        </select>`
+      )
+      .join('')}
+  </div>`;
+}
+
+function wireFilterBar(f: ListFilters, rerender: () => void): void {
+  document.querySelectorAll<HTMLSelectElement>('.filter-bar select').forEach((sel) =>
+    sel.addEventListener('change', () => {
+      f[sel.dataset.f as keyof ListFilters] = sel.value;
+      rerender();
+    })
+  );
+}
+
 // ---------- chrome ----------
 
-function shell(content: string, nav: 'routes' | 'gyms' | null): void {
+function shell(content: string, nav: 'log' | 'routes' | 'gyms' | null): void {
   const navHtml =
     nav === null
       ? ''
       : `<nav class="bottomnav">
-          <a href="#/" class="${nav === 'routes' ? 'active' : ''}">
+          <a href="#/" class="${nav === 'log' ? 'active' : ''}">
+            <svg viewBox="0 0 24 24"><path d="M5 6 H19 M5 12 H19 M5 18 H12" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Log
+          </a>
+          <a href="#/routes" class="${nav === 'routes' ? 'active' : ''}">
             <svg viewBox="0 0 24 24"><path d="M5 20 L12 4 L19 20" stroke-linecap="round" stroke-linejoin="round"/></svg>
             Routes
           </a>
@@ -308,42 +368,275 @@ function renderLogin(): void {
   });
 }
 
-// ---------- routes list ----------
+// ---------- log (landing page) ----------
 
-async function renderRoutes(): Promise<void> {
-  const gym = activeGym();
-  if (!gym) {
-    window.location.hash = '#/gyms';
-    return;
-  }
-
-  let routes: RouteWithStats[];
+async function renderLog(): Promise<void> {
+  let entries: LogEntry[];
   try {
-    routes = (await api.listRoutes(gym.id, filter === 'archived')).routes;
+    entries = (await api.listLog()).entries;
   } catch (err) {
     fail(err);
     return;
   }
 
-  const visible = routes.filter((r) => {
-    if (filter === 'archived') return r.archived === 1;
-    if (r.archived === 1) return false;
-    if (filter === 'all') return true;
-    return routeState(r) === filter;
+  const f = logFilters;
+  const visible = entries.filter((e) => {
+    if (f.gym !== 'all' && e.gym_id !== f.gym) return false;
+    if (f.discipline !== 'all' && e.route_discipline !== f.discipline) return false;
+    if (f.status !== 'all' && e.result !== f.status) return false;
+    return true;
   });
 
-  const filters: [Filter, string][] = [
-    ['all', 'All'],
-    ['project', 'Projects'],
-    ['new', 'New'],
-    ['sent', 'Sent'],
-    ['archived', 'Archived'],
-  ];
+  if (f.sort === 'oldest') visible.reverse();
+  if (f.sort === 'grade') visible.sort((a, b) => gradeRank(b.route_grade) - gradeRank(a.route_grade));
+
+  const items = visible
+    .map((e) => {
+      const meta = [e.gym_name, DISCIPLINE_LABELS[e.route_discipline]].filter(Boolean).join(' · ');
+      const detail = [e.high_point, e.notes].filter(Boolean).join(' — ');
+      return `<a class="route-card log-entry" href="#/route/${esc(e.route_id)}">
+        <span class="tape" style="background:${colorHex(e.route_color)}"></span>
+        <span class="route-card-body">
+          <span class="route-card-top">
+            <strong>${esc(routeTitle({ name: e.route_name, color: e.route_color, grade: e.route_grade }))}</strong>
+            <span class="attempt-result ${e.result === 'send' ? 'is-send' : ''}">${e.result === 'send' ? 'SENT' : 'attempt'}</span>
+          </span>
+          <span class="route-card-meta">${esc(meta)}</span>
+          <span class="route-card-meta dim">${esc(e.attempted_on)} · ${esc(recency(e.attempted_on))}</span>
+          ${detail ? `<span class="route-card-meta">${esc(detail)}</span>` : ''}
+        </span>
+        <span class="route-card-grade">${esc(e.route_grade)}</span>
+      </a>`;
+    })
+    .join('');
+
+  shell(
+    `${header('climb log')}
+    <main class="list">
+      <a class="btn primary wide big-log" href="#/log/new">+ Log a climb</a>
+      ${filterBar(
+        f,
+        [
+          ['all', 'All results'],
+          ['send', 'Sends'],
+          ['attempt', 'Attempts'],
+        ],
+        [
+          ['newest', 'Newest first'],
+          ['oldest', 'Oldest first'],
+          ['grade', 'By grade'],
+        ]
+      )}
+      ${items || '<p class="empty">Nothing logged yet. Go climb something and brag about it here.</p>'}
+    </main>`,
+    'log'
+  );
+
+  wireFilterBar(f, () => void renderLog());
+}
+
+// ---------- log a climb ----------
+
+async function renderLogNew(): Promise<void> {
+  if (gyms.length === 0) {
+    window.location.hash = '#/gyms';
+    return;
+  }
+
+  const NEW_ROUTE = '__new';
+  let selectedGymId = gyms.some((g) => g.id === activeGymId) ? activeGymId! : gyms[0].id;
+
+  const colorChips = Object.keys(NAMED_COLORS)
+    .map(
+      (name) =>
+        `<button type="button" class="swatch" data-color="${name}"
+          style="background:${NAMED_COLORS[name]}" aria-label="${name}"></button>`
+    )
+    .join('');
+
+  shell(
+    `<header class="masthead compact">
+      <a class="back" href="#/">&larr;</a>
+      <h2>Log a climb</h2>
+    </header>
+    <main class="form-page">
+      <form id="log-form">
+        <label>Gym
+          <select name="gym">
+            ${gyms
+              .map((g) => `<option value="${esc(g.id)}" ${g.id === selectedGymId ? 'selected' : ''}>${esc(g.name)}</option>`)
+              .join('')}
+          </select>
+        </label>
+        <label>Route
+          <select name="route"></select>
+        </label>
+        <div id="new-route-fields" class="hidden">
+          <label>Discipline
+            <select name="discipline">
+              ${(Object.keys(DISCIPLINE_LABELS) as Discipline[])
+                .map((d) => `<option value="${d}">${DISCIPLINE_LABELS[d]}</option>`)
+                .join('')}
+            </select>
+          </label>
+          <label>Color
+            <div class="swatches">${colorChips}</div>
+            <input name="color" placeholder="or type one" />
+          </label>
+          <label>Grade
+            <div class="chips" id="grade-chips"></div>
+            <input name="grade" placeholder="V4, 5.11, comp tag…" />
+          </label>
+          <label>Wall / area
+            <input name="wall" placeholder="Overhang, slab wall, cave…" />
+          </label>
+        </div>
+        <div class="seg">
+          <label><input type="radio" name="result" value="send" checked /><span>Sent</span></label>
+          <label><input type="radio" name="result" value="attempt" /><span>Didn't send</span></label>
+        </div>
+        <label>Date <input type="date" name="attempted_on" value="${todayStr()}" required /></label>
+        <label>How far? <span class="hint">(if you didn't send)</span>
+          <input name="high_point" placeholder="past the crux, 3rd clip, off the ground…" />
+        </label>
+        <label>Notes <textarea name="notes" rows="2" placeholder="what happened"></textarea></label>
+        <button type="submit" class="btn primary wide">Log it</button>
+      </form>
+    </main>`,
+    'log'
+  );
+
+  const form = document.getElementById('log-form') as HTMLFormElement;
+  const gymSelect = form.querySelector<HTMLSelectElement>('select[name=gym]')!;
+  const routeSelect = form.querySelector<HTMLSelectElement>('select[name=route]')!;
+  const newRouteFields = document.getElementById('new-route-fields')!;
+  const colorInput = form.querySelector<HTMLInputElement>('input[name=color]')!;
+  const gradeInput = form.querySelector<HTMLInputElement>('input[name=grade]')!;
+  const disciplineSelect = form.querySelector<HTMLSelectElement>('select[name=discipline]')!;
+
+  form.querySelectorAll<HTMLButtonElement>('.swatch').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      colorInput.value = btn.dataset.color ?? '';
+      form.querySelectorAll('.swatch').forEach((s) => s.classList.remove('active'));
+      btn.classList.add('active');
+    })
+  );
+
+  function renderGradeChips(): void {
+    const grades = disciplineSelect.value === 'boulder' ? BOULDER_GRADES : ROPE_GRADES;
+    const container = document.getElementById('grade-chips')!;
+    container.textContent = '';
+    for (const g of grades) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip';
+      chip.textContent = g;
+      chip.addEventListener('click', () => {
+        gradeInput.value = g;
+      });
+      container.appendChild(chip);
+    }
+  }
+  renderGradeChips();
+  disciplineSelect.addEventListener('change', renderGradeChips);
+
+  function syncNewRouteFields(): void {
+    newRouteFields.classList.toggle('hidden', routeSelect.value !== NEW_ROUTE);
+  }
+
+  async function loadRouteOptions(): Promise<void> {
+    let routes: { id: string; name: string; color: string; grade: string; last_attempted_on: string | null }[] = [];
+    try {
+      routes = (await api.listRoutes(selectedGymId)).routes;
+    } catch (err) {
+      fail(err);
+    }
+    routes.sort((a, b) => (b.last_attempted_on ?? '').localeCompare(a.last_attempted_on ?? ''));
+    routeSelect.textContent = '';
+    for (const r of routes) {
+      const opt = document.createElement('option');
+      opt.value = r.id;
+      opt.textContent = `${routeTitle(r)}${r.grade ? ` (${r.grade})` : ''}`;
+      routeSelect.appendChild(opt);
+    }
+    const newOpt = document.createElement('option');
+    newOpt.value = NEW_ROUTE;
+    newOpt.textContent = '+ New route…';
+    routeSelect.appendChild(newOpt);
+    if (routes.length === 0) routeSelect.value = NEW_ROUTE;
+    syncNewRouteFields();
+  }
+
+  gymSelect.addEventListener('change', () => {
+    selectedGymId = gymSelect.value;
+    setActiveGym(selectedGymId);
+    void loadRouteOptions();
+  });
+  routeSelect.addEventListener('change', syncNewRouteFields);
+  await loadRouteOptions();
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = new FormData(form);
+    try {
+      let routeId = String(data.get('route'));
+      if (routeId === NEW_ROUTE) {
+        const created = await api.createRoute(selectedGymId, {
+          name: '',
+          grade: String(data.get('grade') ?? ''),
+          color: String(data.get('color') ?? ''),
+          wall: String(data.get('wall') ?? ''),
+          discipline: String(data.get('discipline')) as Discipline,
+          notes: '',
+        });
+        routeId = created.route.id;
+      }
+      await api.createAttempt(routeId, {
+        attempted_on: String(data.get('attempted_on')),
+        result: String(data.get('result')) as 'send' | 'attempt',
+        high_point: String(data.get('high_point') ?? ''),
+        notes: String(data.get('notes') ?? ''),
+      });
+      toast(String(data.get('result')) === 'send' ? 'Nice. Logged the send.' : 'Logged. Next time.');
+      window.location.hash = '#/';
+    } catch (err) {
+      fail(err);
+    }
+  });
+}
+
+// ---------- routes list ----------
+
+async function renderRoutes(): Promise<void> {
+  let routes: RouteWithGym[];
+  try {
+    routes = (await api.listAllRoutes(true)).routes;
+  } catch (err) {
+    fail(err);
+    return;
+  }
+
+  const f = routeFilters;
+  const visible = routes.filter((r) => {
+    if (f.gym !== 'all' && r.gym_id !== f.gym) return false;
+    if (f.discipline !== 'all' && r.discipline !== f.discipline) return false;
+    if (f.status === 'archived') return r.archived === 1;
+    if (r.archived === 1) return false;
+    if (f.status === 'active') return true;
+    return routeState(r) === f.status;
+  });
+
+  if (f.sort === 'recent') {
+    visible.sort((a, b) => (b.last_attempted_on ?? '').localeCompare(a.last_attempted_on ?? ''));
+  } else if (f.sort === 'grade') {
+    visible.sort((a, b) => gradeRank(b.grade) - gradeRank(a.grade));
+  }
+  // 'newest' keeps the server's created_at DESC order.
 
   const cards = visible
     .map((r) => {
       const state = routeState(r);
-      const meta = [r.wall, DISCIPLINE_LABELS[r.discipline]].filter(Boolean).join(' · ');
+      const meta = [r.gym_name, r.wall, DISCIPLINE_LABELS[r.discipline]].filter(Boolean).join(' · ');
       const last = r.last_attempted_on
         ? `${r.attempt_count} ${r.attempt_count === 1 ? 'try' : 'tries'} · last ${recency(r.last_attempted_on)}`
         : 'not tried yet';
@@ -355,7 +648,7 @@ async function renderRoutes(): Promise<void> {
         <span class="route-card-body">
           <span class="route-card-top">
             <strong>${esc(routeTitle(r))}</strong>
-            <span class="state state-${state}">${state}</span>
+            <span class="state state-${state}">${STATE_LABELS[state]}</span>
           </span>
           <span class="route-card-meta">${esc(meta)}</span>
           <span class="route-card-meta dim">${esc(last)}</span>
@@ -367,22 +660,32 @@ async function renderRoutes(): Promise<void> {
     .join('');
 
   const emptyCopy =
-    filter === 'archived'
-      ? 'Nothing archived at this gym.'
-      : filter === 'sent'
-        ? 'No sends logged yet. Get after it.'
-        : filter === 'project'
-          ? 'No open projects. Go fall off something.'
-          : 'No routes yet. Add what the setters put up.';
+    f.status === 'archived'
+      ? 'Nothing archived here.'
+      : f.status === 'sent'
+        ? 'No sends match. Get after it.'
+        : f.status === 'project'
+          ? 'Nothing in progress. Go fall off something.'
+          : 'No routes match. Add what the setters put up.';
 
   shell(
-    `${header(gym.name)}
-    <div class="filters">
-      ${filters
-        .map(([key, label]) => `<button class="chip ${filter === key ? 'active' : ''}" data-filter="${key}">${label}</button>`)
-        .join('')}
-    </div>
+    `${header('routes')}
     <main class="list">
+      ${filterBar(
+        f,
+        [
+          ['active', 'All active'],
+          ['project', 'In progress'],
+          ['new', 'Not tried'],
+          ['sent', 'Sent'],
+          ['archived', 'Archived'],
+        ],
+        [
+          ['recent', 'Recent activity'],
+          ['grade', 'By grade'],
+          ['newest', 'Newest first'],
+        ]
+      )}
       ${cards || `<p class="empty">${emptyCopy}</p>`}
     </main>
     <a class="fab" href="#/new" aria-label="Add route">+</a>`,
@@ -390,20 +693,13 @@ async function renderRoutes(): Promise<void> {
   );
 
   hydratePhotos();
-
-  document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach((btn) =>
-    btn.addEventListener('click', () => {
-      filter = btn.dataset.filter as Filter;
-      void renderRoutes();
-    })
-  );
+  wireFilterBar(f, () => void renderRoutes());
 }
 
 // ---------- route form ----------
 
 async function renderRouteForm(routeId: string | null): Promise<void> {
-  const gym = activeGym();
-  if (!gym) {
+  if (gyms.length === 0) {
     window.location.hash = '#/gyms';
     return;
   }
@@ -418,6 +714,8 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
     }
   }
 
+  const selectedGymId = route?.gym_id ?? (gyms.some((g) => g.id === activeGymId) ? activeGymId! : gyms[0].id);
+
   const colorChips = Object.keys(NAMED_COLORS)
     .map(
       (name) =>
@@ -428,11 +726,18 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
 
   shell(
     `<header class="masthead compact">
-      <a class="back" href="${routeId ? `#/route/${esc(routeId)}` : '#/'}">&larr;</a>
+      <a class="back" href="${routeId ? `#/route/${esc(routeId)}` : '#/routes'}">&larr;</a>
       <h2>${routeId ? 'Edit route' : 'New route'}</h2>
     </header>
     <main class="form-page">
       <form id="route-form">
+        <label>Gym
+          <select name="gym_id">
+            ${gyms
+              .map((g) => `<option value="${esc(g.id)}" ${g.id === selectedGymId ? 'selected' : ''}>${esc(g.name)}</option>`)
+              .join('')}
+          </select>
+        </label>
         <label>Discipline
           <select name="discipline">
             ${(Object.keys(DISCIPLINE_LABELS) as Discipline[])
@@ -454,7 +759,7 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
         <label>Wall / area
           <input name="wall" placeholder="Overhang, slab wall, cave…" value="${esc(route?.wall ?? '')}" />
         </label>
-        <label>Name <span class="hint">(optional — setters rarely bother, you don't have to either)</span>
+        <label>Name <span class="hint">(optional — we'll make one up if you don't)</span>
           <input name="name" value="${esc(route?.name ?? '')}" />
         </label>
         <label>Notes
@@ -501,6 +806,7 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const data = new FormData(form);
+    const gymId = String(data.get('gym_id'));
     const fields = {
       name: String(data.get('name') ?? ''),
       grade: String(data.get('grade') ?? ''),
@@ -511,10 +817,10 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
     };
     try {
       if (routeId) {
-        await api.updateRoute(routeId, fields);
+        await api.updateRoute(routeId, { ...fields, gym_id: gymId });
         window.location.hash = `#/route/${routeId}`;
       } else {
-        const created = await api.createRoute(gym.id, fields);
+        const created = await api.createRoute(gymId, fields);
         window.location.hash = `#/route/${created.route.id}`;
       }
     } catch (err) {
@@ -533,13 +839,14 @@ async function renderRouteDetail(routeId: string): Promise<void> {
     ({ route, attempts, photos } = await api.getRoute(routeId));
   } catch (err) {
     fail(err);
-    window.location.hash = '#/';
+    window.location.hash = '#/routes';
     return;
   }
 
   const sent = attempts.some((a) => a.result === 'send');
   const flashed = attempts.length > 0 && attempts[attempts.length - 1].result === 'send';
-  const stateLabel = sent ? (flashed ? 'flashed' : 'sent') : attempts.length > 0 ? 'project' : 'new';
+  const stateLabel = sent ? (flashed ? 'flashed' : 'sent') : attempts.length > 0 ? 'in progress' : 'not tried';
+  const gymName = gyms.find((g) => g.id === route.gym_id)?.name ?? '';
 
   const history = attempts
     .map((a) => {
@@ -555,11 +862,11 @@ async function renderRouteDetail(routeId: string): Promise<void> {
     })
     .join('');
 
-  const meta = [route.wall, DISCIPLINE_LABELS[route.discipline]].filter(Boolean).join(' · ');
+  const meta = [gymName, route.wall, DISCIPLINE_LABELS[route.discipline]].filter(Boolean).join(' · ');
 
   shell(
     `<header class="masthead compact">
-      <a class="back" href="#/">&larr;</a>
+      <a class="back" href="#/routes">&larr;</a>
       <h2>${esc(routeTitle(route))}</h2>
       <a class="edit-link" href="#/route/${esc(route.id)}/edit">Edit</a>
     </header>
@@ -678,7 +985,7 @@ async function renderRouteDetail(routeId: string): Promise<void> {
   document.getElementById('archive-btn')!.addEventListener('click', async () => {
     try {
       await api.updateRoute(route.id, { archived: route.archived ? 0 : 1 });
-      window.location.hash = '#/';
+      window.location.hash = '#/routes';
     } catch (err) {
       fail(err);
     }
@@ -688,7 +995,7 @@ async function renderRouteDetail(routeId: string): Promise<void> {
     if (!confirm('Delete this route and all its history? Archiving is usually what you want.')) return;
     try {
       await api.deleteRoute(route.id);
-      window.location.hash = '#/';
+      window.location.hash = '#/routes';
     } catch (err) {
       fail(err);
     }
@@ -710,7 +1017,7 @@ async function renderGyms(): Promise<void> {
       (g) => `<li class="gym ${g.id === activeGymId ? 'active' : ''}">
         <button class="gym-pick" data-gym="${esc(g.id)}">
           <strong>${esc(g.name)}</strong>
-          ${g.id === activeGymId ? '<span class="state state-sent">current</span>' : ''}
+          ${g.id === activeGymId ? '<span class="state state-sent">default</span>' : ''}
         </button>
         <button class="linkish" data-rename="${esc(g.id)}">rename</button>
       </li>`
@@ -733,7 +1040,8 @@ async function renderGyms(): Promise<void> {
   document.querySelectorAll<HTMLButtonElement>('[data-gym]').forEach((btn) =>
     btn.addEventListener('click', () => {
       setActiveGym(btn.dataset.gym!);
-      window.location.hash = '#/';
+      routeFilters.gym = btn.dataset.gym!;
+      window.location.hash = '#/routes';
     })
   );
 
@@ -757,7 +1065,8 @@ async function renderGyms(): Promise<void> {
     try {
       const created = await api.createGym(input.value.trim());
       setActiveGym(created.gym.id);
-      window.location.hash = '#/';
+      await loadGyms();
+      window.location.hash = '#/routes';
     } catch (err) {
       fail(err);
     }
@@ -802,6 +1111,10 @@ async function route(): Promise<void> {
   const editMatch = hash.match(/^#\/route\/([\w-]+)\/edit$/);
 
   if (hash === '#/') {
+    await renderLog();
+  } else if (hash === '#/log/new') {
+    await renderLogNew();
+  } else if (hash === '#/routes') {
     await renderRoutes();
   } else if (hash === '#/new') {
     await renderRouteForm(null);

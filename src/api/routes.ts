@@ -13,6 +13,7 @@ const routePatchSchema = z.object({
   discipline: z.enum(['boulder', 'top_rope', 'lead', 'autobelay']).optional(),
   notes: z.string().max(4000).optional(),
   archived: z.union([z.literal(0), z.literal(1)]).optional(),
+  gym_id: z.string().trim().min(1).optional(),
 });
 
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
@@ -24,9 +25,20 @@ const attemptSchema = z.object({
   notes: z.string().max(4000).default(''),
 });
 
+export function defaultRouteName(color: string, grade: string): string {
+  const bits = [color, grade].filter(Boolean).join(' ');
+  return `${bits || 'Route'} added on ${new Date().toISOString().slice(0, 10)}`;
+}
+
 const routes = new Hono<{ Bindings: Env }>();
 
 routes.use('*', authMiddleware);
+
+routes.get('/', async (c) => {
+  const includeArchived = c.req.query('archived') === '1';
+  const result = await queries.listAllRoutes(c.env.DB, c.get('userId'), includeArchived);
+  return c.json({ routes: result });
+});
 
 routes.get('/:id', async (c) => {
   const route = await queries.getRoute(c.env.DB, c.get('userId'), c.req.param('id'));
@@ -42,6 +54,9 @@ routes.patch('/:id', async (c) => {
   const parsed = routePatchSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {
     return c.json({ error: 'Invalid route fields' }, 400);
+  }
+  if (parsed.data.gym_id && !(await queries.getGym(c.env.DB, c.get('userId'), parsed.data.gym_id))) {
+    return c.json({ error: 'Gym not found' }, 404);
   }
   const route = await queries.updateRoute(c.env.DB, c.get('userId'), c.req.param('id'), parsed.data);
   if (!route) {
