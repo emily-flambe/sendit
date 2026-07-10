@@ -35,6 +35,16 @@ export interface RouteWithStats extends Route {
   attempt_count: number;
   send_count: number;
   last_attempted_on: string | null;
+  photo_count: number;
+  first_photo_id: string | null;
+}
+
+export interface RoutePhoto {
+  id: string;
+  route_id: string;
+  content_type: string;
+  size: number;
+  created_at: number;
 }
 
 export interface Attempt {
@@ -108,7 +118,8 @@ export const api = {
     request<{ routes: RouteWithStats[] }>('GET', `/gyms/${gymId}/routes${includeArchived ? '?archived=1' : ''}`),
   createRoute: (gymId: string, fields: Partial<Route>) =>
     request<{ route: Route }>('POST', `/gyms/${gymId}/routes`, fields),
-  getRoute: (id: string) => request<{ route: Route; attempts: Attempt[] }>('GET', `/routes/${id}`),
+  getRoute: (id: string) =>
+    request<{ route: Route; attempts: Attempt[]; photos: RoutePhoto[] }>('GET', `/routes/${id}`),
   updateRoute: (id: string, fields: Partial<Route>) => request<{ route: Route }>('PATCH', `/routes/${id}`, fields),
   deleteRoute: (id: string) => request<{ success: boolean }>('DELETE', `/routes/${id}`),
 
@@ -117,4 +128,27 @@ export const api = {
   updateAttempt: (id: string, fields: Partial<Pick<Attempt, 'attempted_on' | 'result' | 'high_point' | 'notes'>>) =>
     request<{ attempt: Attempt }>('PATCH', `/attempts/${id}`, fields),
   deleteAttempt: (id: string) => request<{ success: boolean }>('DELETE', `/attempts/${id}`),
+
+  uploadRoutePhoto: async (routeId: string, blob: Blob): Promise<{ photo: RoutePhoto }> => {
+    const res = await fetch(`/api/routes/${routeId}/photos`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${getToken()}`, 'Content-Type': blob.type },
+      body: blob,
+    });
+    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) {
+      throw new ApiError(res.status, typeof data.error === 'string' ? data.error : 'Upload failed');
+    }
+    return data as unknown as { photo: RoutePhoto };
+  },
+  fetchPhotoBlob: async (photoId: string): Promise<Blob> => {
+    const res = await fetch(`/api/photos/${photoId}`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    });
+    if (!res.ok) {
+      throw new ApiError(res.status, 'Could not load photo');
+    }
+    return res.blob();
+  },
+  deletePhoto: (id: string) => request<{ success: boolean }>('DELETE', `/photos/${id}`),
 };

@@ -4,6 +4,7 @@ import authApi from './api/auth';
 import gymsApi from './api/gyms';
 import routesApi from './api/routes';
 import attemptsApi from './api/attempts';
+import photosApi from './api/photos';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -13,6 +14,7 @@ app.route('/api/auth', authApi);
 app.route('/api/gyms', gymsApi);
 app.route('/api/routes', routesApi);
 app.route('/api/attempts', attemptsApi);
+app.route('/api/photos', photosApi);
 
 app.all('/api/*', (c) => c.json({ error: 'Not found' }, 404));
 
