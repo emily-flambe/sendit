@@ -519,7 +519,7 @@ input[type='radio'] {
 
 .log-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 10px;
 }
 
@@ -809,12 +809,24 @@ input[type='radio'] {
 
 .photo-add {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2px;
   border-style: dashed;
-  color: var(--chalk-faint);
-  font-size: 30px;
+  color: var(--chalk-dim);
+}
+
+.photo-add-plus {
+  font-size: 26px;
   font-weight: 300;
+  line-height: 1;
+}
+
+.photo-add-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .photo-add:active {

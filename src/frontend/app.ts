@@ -585,14 +585,14 @@ async function renderRouteDetail(routeId: string): Promise<void> {
             .join('')}
           <label class="photo-add" aria-label="Add photo">
             <input type="file" accept="image/*" capture="environment" hidden />
-            <span>+</span>
+            <span class="photo-add-plus">+</span>
+            <span class="photo-add-label">photo</span>
           </label>
         </div>
       </section>
       ${route.notes ? `<section class="route-notes"><h3>Notes</h3><p>${esc(route.notes)}</p></section>` : ''}
       <section class="log-actions" style="--route-color:${colorHex(route.color)}">
-        <button class="btn send-btn" id="sent-btn">Sent it</button>
-        <button class="btn ghost" id="attempt-btn">Log attempt</button>
+        <button class="btn send-btn" id="attempt-btn">Log attempt</button>
       </section>
       <form id="attempt-form" class="attempt-form hidden">
         <div class="seg">
@@ -638,16 +638,6 @@ async function renderRouteDetail(routeId: string): Promise<void> {
     } catch (err) {
       photoInput.disabled = false;
       photoInput.value = '';
-      fail(err);
-    }
-  });
-
-  document.getElementById('sent-btn')!.addEventListener('click', async () => {
-    try {
-      await api.createAttempt(route.id, { attempted_on: todayStr(), result: 'send' });
-      toast('Nice. Logged the send.');
-      void renderRouteDetail(route.id);
-    } catch (err) {
       fail(err);
     }
   });
