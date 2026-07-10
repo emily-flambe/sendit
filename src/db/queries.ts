@@ -1,4 +1,4 @@
-import type { Attempt, Gym, Route, RouteWithStats, User } from '../types';
+import type { Attempt, Gym, Route, RoutePhoto, RouteWithStats, User } from '../types';
 
 interface UserRow extends User {
   password_hash: string;
@@ -86,7 +86,9 @@ export async function listRoutes(
       `SELECT r.*,
               COUNT(a.id) AS attempt_count,
               COALESCE(SUM(a.result = 'send'), 0) AS send_count,
-              MAX(a.attempted_on) AS last_attempted_on
+              MAX(a.attempted_on) AS last_attempted_on,
+              (SELECT COUNT(*) FROM route_photos p WHERE p.route_id = r.id) AS photo_count,
+              (SELECT p.id FROM route_photos p WHERE p.route_id = r.id ORDER BY p.created_at LIMIT 1) AS first_photo_id
        FROM routes r
        JOIN gyms g ON g.id = r.gym_id
        LEFT JOIN attempts a ON a.route_id = r.id
@@ -268,4 +270,65 @@ export async function deleteAttempt(db: D1Database, userId: string, attemptId: s
   if (!existing) return false;
   await db.prepare('DELETE FROM attempts WHERE id = ?').bind(attemptId).run();
   return true;
+}
+
+export async function listPhotos(db: D1Database, userId: string, routeId: string): Promise<RoutePhoto[]> {
+  const result = await db
+    .prepare(
+      `SELECT p.* FROM route_photos p
+       JOIN routes r ON r.id = p.route_id
+       JOIN gyms g ON g.id = r.gym_id
+       WHERE p.route_id = ? AND g.user_id = ?
+       ORDER BY p.created_at`
+    )
+    .bind(routeId, userId)
+    .all<RoutePhoto>();
+  return result.results;
+}
+
+export async function getPhoto(db: D1Database, userId: string, photoId: string): Promise<RoutePhoto | null> {
+  return db
+    .prepare(
+      `SELECT p.* FROM route_photos p
+       JOIN routes r ON r.id = p.route_id
+       JOIN gyms g ON g.id = r.gym_id
+       WHERE p.id = ? AND g.user_id = ?`
+    )
+    .bind(photoId, userId)
+    .first<RoutePhoto>();
+}
+
+export async function countPhotos(db: D1Database, routeId: string): Promise<number> {
+  const row = await db
+    .prepare('SELECT COUNT(*) AS n FROM route_photos WHERE route_id = ?')
+    .bind(routeId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+export async function createPhoto(
+  db: D1Database,
+  routeId: string,
+  input: { id: string; r2_key: string; content_type: string; size: number }
+): Promise<RoutePhoto> {
+  const photo: RoutePhoto = {
+    id: input.id,
+    route_id: routeId,
+    r2_key: input.r2_key,
+    content_type: input.content_type,
+    size: input.size,
+    created_at: Date.now(),
+  };
+  await db
+    .prepare(
+      `INSERT INTO route_photos (id, route_id, r2_key, content_type, size, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(photo.id, photo.route_id, photo.r2_key, photo.content_type, photo.size, photo.created_at)
+    .run();
+  return photo;
+}
+
+export async function deletePhoto(db: D1Database, photoId: string): Promise<void> {
+  await db.prepare('DELETE FROM route_photos WHERE id = ?').bind(photoId).run();
 }

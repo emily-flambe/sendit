@@ -1,5 +1,6 @@
 export interface Env {
   DB: D1Database;
+  PHOTOS: R2Bucket;
   JWT_SECRET: string;
 }
 
@@ -49,4 +50,15 @@ export interface RouteWithStats extends Route {
   attempt_count: number;
   send_count: number;
   last_attempted_on: string | null;
+  photo_count: number;
+  first_photo_id: string | null;
+}
+
+export interface RoutePhoto {
+  id: string;
+  route_id: string;
+  r2_key: string;
+  content_type: string;
+  size: number;
+  created_at: number;
 }

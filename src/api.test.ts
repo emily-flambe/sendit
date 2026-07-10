@@ -194,3 +194,134 @@ describe('gyms and routes', () => {
     expect(gone.status).toBe(404);
   });
 });
+
+describe('route photos', () => {
+  let token: string;
+  let gymId: string;
+
+  const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+
+  async function uploadPhoto(routeId: string, authToken: string, contentType = 'image/jpeg', bytes: BodyInit = JPEG_BYTES) {
+    const res = await app.request(
+      `/api/routes/${routeId}/photos`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': contentType, Authorization: `Bearer ${authToken}` },
+        body: bytes,
+      },
+      env
+    );
+    return { status: res.status, data: (await res.json()) as Json };
+  }
+
+  async function createRoute(): Promise<string> {
+    const created = await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V4', color: 'blue' }, token);
+    expect(created.status).toBe(201);
+    return created.data.route.id as string;
+  }
+
+  beforeAll(async () => {
+    token = await registerUser('photographer');
+    const gym = await call('POST', '/api/gyms', { name: 'Photo Gym' }, token);
+    gymId = gym.data.gym.id;
+  });
+
+  it('uploads, lists, serves, and deletes a photo', async () => {
+    const routeId = await createRoute();
+
+    const uploaded = await uploadPhoto(routeId, token);
+    expect(uploaded.status).toBe(201);
+    const photoId = uploaded.data.photo.id as string;
+    expect(uploaded.data.photo.content_type).toBe('image/jpeg');
+    expect(uploaded.data.photo.size).toBe(JPEG_BYTES.byteLength);
+
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.photos).toHaveLength(1);
+    expect(detail.data.photos[0].id).toBe(photoId);
+
+    const img = await app.request(
+      `/api/photos/${photoId}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      env
+    );
+    expect(img.status).toBe(200);
+    expect(img.headers.get('Content-Type')).toBe('image/jpeg');
+    expect(new Uint8Array(await img.arrayBuffer())).toEqual(JPEG_BYTES);
+
+    const del = await call('DELETE', `/api/photos/${photoId}`, undefined, token);
+    expect(del.status).toBe(200);
+
+    const gone = await app.request(
+      `/api/photos/${photoId}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+      env
+    );
+    expect(gone.status).toBe(404);
+    await gone.arrayBuffer();
+    expect(await env.PHOTOS.get(`photos/${routeId}/${photoId}`)).toBeNull();
+  });
+
+  it('surfaces photo rollups in the route list', async () => {
+    const routeId = await createRoute();
+    const first = await uploadPhoto(routeId, token);
+    await uploadPhoto(routeId, token);
+
+    const list = await call('GET', `/api/gyms/${gymId}/routes`, undefined, token);
+    const row = list.data.routes.find((r: Json) => r.id === routeId);
+    expect(row.photo_count).toBe(2);
+    expect(row.first_photo_id).toBe(first.data.photo.id);
+  });
+
+  it('rejects bad uploads', async () => {
+    const routeId = await createRoute();
+
+    const badType = await uploadPhoto(routeId, token, 'application/pdf');
+    expect(badType.status).toBe(400);
+
+    const empty = await uploadPhoto(routeId, token, 'image/png', new Uint8Array(0));
+    expect(empty.status).toBe(400);
+
+    const huge = await uploadPhoto(routeId, token, 'image/jpeg', new Uint8Array(10 * 1024 * 1024 + 1));
+    expect(huge.status).toBe(413);
+  });
+
+  it('enforces the per-route photo cap', async () => {
+    const routeId = await createRoute();
+    for (let i = 0; i < 12; i++) {
+      const ok = await uploadPhoto(routeId, token);
+      expect(ok.status).toBe(201);
+    }
+    const overflow = await uploadPhoto(routeId, token);
+    expect(overflow.status).toBe(400);
+  });
+
+  it("hides one user's photos from another", async () => {
+    const snoop = await registerUser('photo-snoop');
+    const routeId = await createRoute();
+    const uploaded = await uploadPhoto(routeId, token);
+    const photoId = uploaded.data.photo.id as string;
+
+    const peek = await call('GET', `/api/photos/${photoId}`, undefined, snoop);
+    expect(peek.status).toBe(404);
+
+    const del = await call('DELETE', `/api/photos/${photoId}`, undefined, snoop);
+    expect(del.status).toBe(404);
+
+    const push = await uploadPhoto(routeId, snoop);
+    expect(push.status).toBe(404);
+  });
+
+  it('cleans up R2 objects when the route is deleted', async () => {
+    const routeId = await createRoute();
+    const uploaded = await uploadPhoto(routeId, token);
+    const key = uploaded.data.photo.r2_key as string;
+    const stored = await env.PHOTOS.get(key);
+    expect(stored).not.toBeNull();
+    // R2 body streams must be fully consumed or isolated storage fails to unwind.
+    await stored!.arrayBuffer();
+
+    const del = await call('DELETE', `/api/routes/${routeId}`, undefined, token);
+    expect(del.status).toBe(200);
+    expect(await env.PHOTOS.get(key)).toBeNull();
+  });
+});

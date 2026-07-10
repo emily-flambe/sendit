@@ -6,6 +6,7 @@ import {
   type Attempt,
   type Discipline,
   type Gym,
+  type RoutePhoto,
   type RouteWithStats,
   type Route,
 } from './api';
@@ -121,6 +122,96 @@ function toast(message: string): void {
 
 function fail(err: unknown): void {
   toast(err instanceof ApiError ? err.message : 'Network error');
+}
+
+// ---------- photos ----------
+
+// Photo bytes require the Bearer token, so <img src> can't point at the API
+// directly. Fetch blobs once per session and hand out object URLs.
+const photoUrls = new Map<string, string>();
+
+async function photoUrl(photoId: string): Promise<string> {
+  const cached = photoUrls.get(photoId);
+  if (cached) return cached;
+  const blob = await api.fetchPhotoBlob(photoId);
+  const url = URL.createObjectURL(blob);
+  photoUrls.set(photoId, url);
+  return url;
+}
+
+function hydratePhotos(scope: ParentNode = document): void {
+  scope.querySelectorAll<HTMLImageElement>('img[data-photo]').forEach((img) => {
+    void photoUrl(img.dataset.photo!)
+      .then((url) => {
+        img.src = url;
+        img.classList.add('loaded');
+      })
+      .catch(() => img.remove());
+  });
+}
+
+const MAX_PHOTO_EDGE = 1600;
+
+// Downscale on-device so a 12MB phone photo becomes a ~300KB JPEG. Safari
+// decodes HEIC here too, which conveniently converts it to JPEG for upload.
+async function preparePhoto(file: File): Promise<Blob> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_PHOTO_EDGE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    if (blob) return blob;
+  } catch {
+    // Couldn't decode locally — send the original and let the server judge it.
+  }
+  return file;
+}
+
+function openLightbox(photo: RoutePhoto, onDelete: () => void): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'lightbox';
+
+  const img = document.createElement('img');
+  img.dataset.photo = photo.id;
+  img.alt = 'Route photo';
+
+  const actions = document.createElement('div');
+  actions.className = 'lightbox-actions';
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn ghost';
+  closeBtn.textContent = 'Close';
+  const deleteBtn = document.createElement('button');
+  deleteBtn.className = 'linkish danger';
+  deleteBtn.textContent = 'Delete photo';
+  actions.append(closeBtn, deleteBtn);
+
+  overlay.append(img, actions);
+  document.body.appendChild(overlay);
+  hydratePhotos(overlay);
+
+  closeBtn.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+  deleteBtn.addEventListener('click', async () => {
+    if (!confirm('Delete this photo?')) return;
+    try {
+      await api.deletePhoto(photo.id);
+      const url = photoUrls.get(photo.id);
+      if (url) {
+        URL.revokeObjectURL(url);
+        photoUrls.delete(photo.id);
+      }
+      overlay.remove();
+      onDelete();
+    } catch (err) {
+      fail(err);
+    }
+  });
 }
 
 function activeGym(): Gym | null {
@@ -256,6 +347,9 @@ async function renderRoutes(): Promise<void> {
       const last = r.last_attempted_on
         ? `${r.attempt_count} ${r.attempt_count === 1 ? 'try' : 'tries'} · last ${recency(r.last_attempted_on)}`
         : 'not tried yet';
+      const thumb = r.first_photo_id
+        ? `<span class="card-thumb"><img data-photo="${esc(r.first_photo_id)}" alt="" /></span>`
+        : '';
       return `<a class="route-card" href="#/route/${esc(r.id)}">
         <span class="tape" style="background:${colorHex(r.color)}"></span>
         <span class="route-card-body">
@@ -266,6 +360,7 @@ async function renderRoutes(): Promise<void> {
           <span class="route-card-meta">${esc(meta)}</span>
           <span class="route-card-meta dim">${esc(last)}</span>
         </span>
+        ${thumb}
         <span class="route-card-grade">${esc(r.grade)}</span>
       </a>`;
     })
@@ -293,6 +388,8 @@ async function renderRoutes(): Promise<void> {
     <a class="fab" href="#/new" aria-label="Add route">+</a>`,
     'routes'
   );
+
+  hydratePhotos();
 
   document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach((btn) =>
     btn.addEventListener('click', () => {
@@ -431,8 +528,9 @@ async function renderRouteForm(routeId: string | null): Promise<void> {
 async function renderRouteDetail(routeId: string): Promise<void> {
   let route: Route;
   let attempts: Attempt[];
+  let photos: RoutePhoto[];
   try {
-    ({ route, attempts } = await api.getRoute(routeId));
+    ({ route, attempts, photos } = await api.getRoute(routeId));
   } catch (err) {
     fail(err);
     window.location.hash = '#/';
@@ -475,6 +573,22 @@ async function renderRouteDetail(routeId: string): Promise<void> {
           ${route.archived ? '<span class="state state-archived">archived</span>' : ''}
         </div>
       </section>
+      <section class="photos">
+        <div class="photo-strip">
+          ${photos
+            .map(
+              (p) =>
+                `<button type="button" class="photo-thumb" data-photo-open="${esc(p.id)}">
+                  <img data-photo="${esc(p.id)}" alt="Route photo" />
+                </button>`
+            )
+            .join('')}
+          <label class="photo-add" aria-label="Add photo">
+            <input type="file" accept="image/*" capture="environment" hidden />
+            <span>+</span>
+          </label>
+        </div>
+      </section>
       ${route.notes ? `<section class="route-notes"><h3>Notes</h3><p>${esc(route.notes)}</p></section>` : ''}
       <section class="log-actions" style="--route-color:${colorHex(route.color)}">
         <button class="btn send-btn" id="sent-btn">Sent it</button>
@@ -501,6 +615,32 @@ async function renderRouteDetail(routeId: string): Promise<void> {
     </main>`,
     'routes'
   );
+
+  hydratePhotos();
+
+  document.querySelectorAll<HTMLButtonElement>('[data-photo-open]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const photo = photos.find((p) => p.id === btn.dataset.photoOpen);
+      if (photo) openLightbox(photo, () => void renderRouteDetail(route.id));
+    })
+  );
+
+  const photoInput = document.querySelector<HTMLInputElement>('.photo-add input')!;
+  photoInput.addEventListener('change', async () => {
+    const file = photoInput.files?.[0];
+    if (!file) return;
+    photoInput.disabled = true;
+    toast('Uploading photo…');
+    try {
+      const blob = await preparePhoto(file);
+      await api.uploadRoutePhoto(route.id, blob);
+      void renderRouteDetail(route.id);
+    } catch (err) {
+      photoInput.disabled = false;
+      photoInput.value = '';
+      fail(err);
+    }
+  });
 
   document.getElementById('sent-btn')!.addEventListener('click', async () => {
     try {
