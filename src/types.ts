@@ -41,6 +41,7 @@ export interface Attempt {
   route_id: string;
   attempted_on: string;
   result: AttemptResult;
+  flashed: number;
   high_point: string;
   notes: string;
   created_at: number;

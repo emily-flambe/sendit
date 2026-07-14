@@ -35,6 +35,7 @@ const routeImageSchema = z.object({
 const attemptSchema = z.object({
   attempted_on: dateString,
   result: z.enum(['send', 'attempt']),
+  flashed: z.union([z.literal(0), z.literal(1)]).default(0),
   high_point: z.string().trim().max(200).default(''),
   notes: z.string().max(4000).default(''),
 });

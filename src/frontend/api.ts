@@ -49,6 +49,7 @@ export interface LogEntry {
   gym_id: string;
   attempted_on: string;
   result: AttemptResult;
+  flashed: number;
   high_point: string;
   notes: string;
   created_at: number;
@@ -85,6 +86,7 @@ export interface Attempt {
   route_id: string;
   attempted_on: string;
   result: AttemptResult;
+  flashed: number;
   high_point: string;
   notes: string;
   created_at: number;
@@ -165,9 +167,11 @@ export const api = {
   updateRoute: (id: string, fields: Partial<Route>) => request<{ route: Route }>('PATCH', `/routes/${id}`, fields),
   deleteRoute: (id: string) => request<{ success: boolean }>('DELETE', `/routes/${id}`),
 
-  createAttempt: (routeId: string, fields: { attempted_on: string; result: AttemptResult; high_point?: string; notes?: string }) =>
-    request<{ attempt: Attempt }>('POST', `/routes/${routeId}/attempts`, fields),
-  updateAttempt: (id: string, fields: Partial<Pick<Attempt, 'attempted_on' | 'result' | 'high_point' | 'notes'>>) =>
+  createAttempt: (
+    routeId: string,
+    fields: { attempted_on: string; result: AttemptResult; flashed?: number; high_point?: string; notes?: string }
+  ) => request<{ attempt: Attempt }>('POST', `/routes/${routeId}/attempts`, fields),
+  updateAttempt: (id: string, fields: Partial<Pick<Attempt, 'attempted_on' | 'result' | 'flashed' | 'high_point' | 'notes'>>) =>
     request<{ attempt: Attempt }>('PATCH', `/attempts/${id}`, fields),
   deleteAttempt: (id: string) => request<{ success: boolean }>('DELETE', `/attempts/${id}`),
 

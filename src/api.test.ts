@@ -151,6 +151,50 @@ describe('gyms and routes', () => {
     expect(fullList.data.routes.some((r: Json) => r.id === routeId)).toBe(true);
   });
 
+  it('stores and toggles the flashed flag', async () => {
+    const created = await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V6' }, token);
+    const routeId = created.data.route.id as string;
+
+    const plain = await call(
+      'POST',
+      `/api/routes/${routeId}/attempts`,
+      { attempted_on: '2026-07-01', result: 'send' },
+      token
+    );
+    expect(plain.status).toBe(201);
+    expect(plain.data.attempt.flashed).toBe(0);
+
+    const flash = await call(
+      'POST',
+      `/api/routes/${routeId}/attempts`,
+      { attempted_on: '2026-07-02', result: 'send', flashed: 1 },
+      token
+    );
+    expect(flash.status).toBe(201);
+    expect(flash.data.attempt.flashed).toBe(1);
+
+    const unset = await call('PATCH', `/api/attempts/${flash.data.attempt.id}`, { flashed: 0 }, token);
+    expect(unset.status).toBe(200);
+    expect(unset.data.attempt.flashed).toBe(0);
+
+    const set = await call('PATCH', `/api/attempts/${plain.data.attempt.id}`, { flashed: 1 }, token);
+    expect(set.status).toBe(200);
+    expect(set.data.attempt.flashed).toBe(1);
+
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    const byId = Object.fromEntries(detail.data.attempts.map((a: Json) => [a.id, a.flashed]));
+    expect(byId[plain.data.attempt.id]).toBe(1);
+    expect(byId[flash.data.attempt.id]).toBe(0);
+
+    const bad = await call(
+      'POST',
+      `/api/routes/${routeId}/attempts`,
+      { attempted_on: '2026-07-03', result: 'send', flashed: true },
+      token
+    );
+    expect(bad.status).toBe(400);
+  });
+
   it('rejects malformed attempts', async () => {
     const created = await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V1' }, token);
     const routeId = created.data.route.id as string;

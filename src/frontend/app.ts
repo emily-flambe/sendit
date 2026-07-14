@@ -611,6 +611,21 @@ async function renderLog(): Promise<void> {
 
 // ---------- log a climb ----------
 
+// The flash checkbox only applies to sends; hide it when "Didn't send" is picked.
+function wireFlashToggle(form: HTMLFormElement): void {
+  const toggle = form.querySelector<HTMLElement>('.flash-toggle')!;
+  const sync = () => {
+    const sent = form.querySelector<HTMLInputElement>('input[name=result]:checked')?.value === 'send';
+    toggle.classList.toggle('hidden', !sent);
+  };
+  form.querySelectorAll<HTMLInputElement>('input[name=result]').forEach((r) => r.addEventListener('change', sync));
+  sync();
+}
+
+function flashedFromForm(data: FormData): number {
+  return String(data.get('result')) === 'send' && data.get('flashed') !== null ? 1 : 0;
+}
+
 async function renderLogNew(): Promise<void> {
   if (gyms.length === 0) {
     window.location.hash = '#/gyms';
@@ -669,6 +684,7 @@ async function renderLogNew(): Promise<void> {
           <label><input type="radio" name="result" value="send" checked /><span>Sent</span></label>
           <label><input type="radio" name="result" value="attempt" /><span>Didn't send</span></label>
         </div>
+        <label class="flash-toggle"><input type="checkbox" name="flashed" /><span>Flash <span class="hint">(sent it on the very first try)</span></span></label>
         <label>Date <input type="date" name="attempted_on" value="${todayStr()}" required /></label>
         <label>How far? <span class="hint">(if you didn't send)</span>
           <input name="high_point" placeholder="past the crux, 3rd clip, off the ground…" />
@@ -750,6 +766,8 @@ async function renderLogNew(): Promise<void> {
   routeSelect.addEventListener('change', syncNewRouteFields);
   await loadRouteOptions();
 
+  wireFlashToggle(form);
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const data = new FormData(form);
@@ -769,6 +787,7 @@ async function renderLogNew(): Promise<void> {
       await api.createAttempt(routeId, {
         attempted_on: String(data.get('attempted_on')),
         result: String(data.get('result')) as 'send' | 'attempt',
+        flashed: flashedFromForm(data),
         high_point: String(data.get('high_point') ?? ''),
         notes: String(data.get('notes') ?? ''),
       });
@@ -1021,17 +1040,27 @@ async function renderRouteDetail(routeId: string): Promise<void> {
   }
 
   const sent = attempts.some((a) => a.result === 'send');
-  const flashed = attempts.length > 0 && attempts[attempts.length - 1].result === 'send';
+  // The flashed flag only counts on the chronologically first attempt (the list is newest-first).
+  const firstAttempt = attempts[attempts.length - 1];
+  const flashed = attempts.length > 0 && firstAttempt.result === 'send' && firstAttempt.flashed === 1;
   const stateLabel = sent ? (flashed ? 'flashed' : 'sent') : attempts.length > 0 ? 'in progress' : 'not tried';
   const gymName = gyms.find((g) => g.id === route.gym_id)?.name ?? '';
 
   const history = attempts
-    .map((a) => {
+    .map((a, i) => {
+      const canFlash = i === attempts.length - 1 && a.result === 'send';
+      const isFlash = canFlash && a.flashed === 1;
       const detail = [a.high_point, a.notes].filter(Boolean).join(' — ');
       return `<li class="attempt ${a.result}">
         <div class="attempt-line">
-          <span class="attempt-result">${a.result === 'send' ? 'SENT' : 'attempt'}</span>
+          <span class="attempt-result">${isFlash ? 'FLASH' : a.result === 'send' ? 'SENT' : 'attempt'}</span>
           <span class="attempt-date">${esc(a.attempted_on)}</span>
+          ${
+            canFlash
+              ? `<button class="linkish flash-chip ${isFlash ? 'on' : ''}" data-flash-attempt="${esc(a.id)}"
+                  data-flashed="${a.flashed}" aria-pressed="${isFlash}">flash</button>`
+              : ''
+          }
           <button class="linkish" data-del-attempt="${esc(a.id)}" aria-label="Delete entry">&times;</button>
         </div>
         ${detail ? `<p class="attempt-detail">${esc(detail)}</p>` : ''}
@@ -1097,6 +1126,7 @@ async function renderRouteDetail(routeId: string): Promise<void> {
           <label><input type="radio" name="result" value="attempt" checked /><span>Didn't send</span></label>
           <label><input type="radio" name="result" value="send" /><span>Sent</span></label>
         </div>
+        <label class="flash-toggle hidden"><input type="checkbox" name="flashed" /><span>Flash <span class="hint">(sent it on the very first try)</span></span></label>
         <label>Date <input type="date" name="attempted_on" value="${todayStr()}" required /></label>
         <label>How far? <input name="high_point" placeholder="past the crux, 3rd clip, off the ground…" /></label>
         <label>Notes <textarea name="notes" rows="2" placeholder="what happened"></textarea></label>
@@ -1177,6 +1207,8 @@ async function renderRouteDetail(routeId: string): Promise<void> {
     attemptForm.classList.toggle('hidden');
   });
 
+  wireFlashToggle(attemptForm);
+
   attemptForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const data = new FormData(attemptForm);
@@ -1184,6 +1216,7 @@ async function renderRouteDetail(routeId: string): Promise<void> {
       await api.createAttempt(route.id, {
         attempted_on: String(data.get('attempted_on')),
         result: String(data.get('result')) as 'send' | 'attempt',
+        flashed: flashedFromForm(data),
         high_point: String(data.get('high_point') ?? ''),
         notes: String(data.get('notes') ?? ''),
       });
@@ -1192,6 +1225,17 @@ async function renderRouteDetail(routeId: string): Promise<void> {
       fail(err);
     }
   });
+
+  document.querySelectorAll<HTMLButtonElement>('[data-flash-attempt]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      try {
+        await api.updateAttempt(btn.dataset.flashAttempt!, { flashed: btn.dataset.flashed === '1' ? 0 : 1 });
+        void renderRouteDetail(route.id);
+      } catch (err) {
+        fail(err);
+      }
+    })
+  );
 
   document.querySelectorAll<HTMLButtonElement>('[data-del-attempt]').forEach((btn) =>
     btn.addEventListener('click', async () => {

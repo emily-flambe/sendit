@@ -565,6 +565,37 @@ input[type='radio'] {
   padding: 16px;
 }
 
+.flash-toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.flash-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--green);
+}
+
+.flash-toggle.hidden {
+  display: none;
+}
+
+.flash-chip {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+
+.flash-chip.on {
+  color: var(--bg);
+  background: #a4d3a2;
+  border-color: #a4d3a2;
+}
+
 .attempt-form.hidden {
   display: none;
 }
