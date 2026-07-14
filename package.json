@@ -9,6 +9,8 @@
     "deploy": "npm run build:frontend && wrangler deploy",
     "test": "mkdir -p dist && vitest run",
     "test:watch": "mkdir -p dist && vitest",
+    "test:e2e": "playwright test",
+    "e2e:server": "npm run build:frontend && wrangler d1 migrations apply sendit-db --local --persist-to .wrangler/e2e && wrangler dev --port 8799 --persist-to .wrangler/e2e --var JWT_SECRET:e2e-secret",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.frontend.json",
     "db:migrate:local": "wrangler d1 migrations apply sendit-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply sendit-db --remote"
@@ -20,6 +22,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.12.1",
     "@cloudflare/workers-types": "^4.20260310.1",
+    "@playwright/test": "^1.61.1",
     "@types/node": "^25.2.3",
     "typescript": "^5.6.0",
     "vite": "^6.0.0",
