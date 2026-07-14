@@ -1233,3 +1233,13 @@ input[type='radio'] {
   text-align: left;
   cursor: pointer;
 }
+
+/* auto-detect (annotation editor) */
+
+.annot-editor-foot .detect-btn {
+  margin-bottom: 8px;
+}
+
+.annot-hint {
+  margin: 0;
+}
