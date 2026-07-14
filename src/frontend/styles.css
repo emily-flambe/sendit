@@ -1214,3 +1214,22 @@ input[type='radio'] {
 #new-route-fields.hidden {
   display: none;
 }
+
+/* route picker (attach photo to route) */
+
+.route-pick-list {
+  width: 100%;
+  max-width: 480px;
+  align-self: flex-start;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.route-pick {
+  text-align: left;
+  cursor: pointer;
+}
