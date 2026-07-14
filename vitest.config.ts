@@ -2,7 +2,7 @@ import { defineWorkersConfig } from '@cloudflare/vitest-pool-workers/config';
 
 export default defineWorkersConfig({
   test: {
-    exclude: ['**/node_modules/**'],
+    exclude: ['**/node_modules/**', 'e2e/**'],
     setupFiles: ['./src/db/test-setup.ts'],
     poolOptions: {
       workers: {
