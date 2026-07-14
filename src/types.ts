@@ -81,11 +81,15 @@ export interface LinkedRoute {
 }
 
 // Normalized to the image: x/y in [0,1], r as a fraction of image width.
-// Objects (not tuples) so future fields (kind, source) need no migration.
+// A manual tap stores just the circle (x, y, r); an auto-detected hold also
+// carries `polygon` — the hold's outline as normalized [x, y] points, rendered
+// as a filled silhouette. x/y/r stay the centroid + bounding radius for
+// hit-testing either way.
 export interface RouteMarker {
   x: number;
   y: number;
   r: number;
+  polygon?: [number, number][];
 }
 
 export interface RouteImage {

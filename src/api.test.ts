@@ -640,6 +640,36 @@ describe('route images', () => {
     }
   });
 
+  it('round-trips markers carrying detected polygons', async () => {
+    const { routeId, photoId } = await createRouteWithPhoto();
+    const markers = [
+      { x: 0.4, y: 0.3, r: 0.05, polygon: [[0.36, 0.26], [0.44, 0.27], [0.45, 0.34], [0.35, 0.33]] },
+      { x: 0.6, y: 0.6, r: 0.02 }, // a plain manual circle alongside
+    ];
+    const set = await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers }, token);
+    expect(set.status).toBe(200);
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.route_image.markers[0].polygon).toHaveLength(4);
+    expect(detail.data.route_image.markers[1].polygon).toBeUndefined();
+  });
+
+  it('rejects malformed polygons', async () => {
+    const { routeId, photoId } = await createRouteWithPhoto();
+    for (const polygon of [
+      [[0.1, 0.1], [0.2, 0.2]], // too few points
+      [[0.1, 0.1], [0.2, 0.2], [1.4, 0.3]], // out of range
+      [[0.1, 0.1], [0.2], [0.3, 0.3]], // not a pair
+    ]) {
+      const res = await call(
+        'PUT',
+        `/api/routes/${routeId}/image`,
+        { photo_id: photoId, markers: [{ x: 0.4, y: 0.3, r: 0.05, polygon }] },
+        token
+      );
+      expect(res.status, JSON.stringify(polygon).slice(0, 50)).toBe(400);
+    }
+  });
+
   it("rejects a photo that isn't on the route", async () => {
     const { routeId } = await createRouteWithPhoto();
     const other = await createRouteWithPhoto();
