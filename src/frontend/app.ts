@@ -16,6 +16,7 @@ import {
   type RouteWithGym,
   type Route,
 } from './api';
+import { detectHolds } from './detect';
 
 const GYM_KEY = 'sendit_gym';
 
@@ -256,6 +257,7 @@ function openLightbox(photo: Photo, routeId: string, onChange: () => void): void
 // ---------- route image (annotated topo) ----------
 
 const DEFAULT_MARKER_R = 0.02;
+const MAX_MARKERS = 100; // mirrors the API's per-image marker cap
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function drawMarkers(svg: SVGSVGElement, markers: RouteMarker[], w: number, h: number, color: string): void {
@@ -446,7 +448,14 @@ function openRouteImageEditor(
   saveBtn.className = 'btn primary';
   head.prepend(cancelBtn);
   head.appendChild(saveBtn);
-  foot.textContent = 'Tap a hold to mark it, tap a circle to remove it. Pinch or scroll to zoom.';
+
+  const detectBtn = document.createElement('button');
+  detectBtn.className = 'btn ghost detect-btn';
+  detectBtn.textContent = '✨ Auto-detect holds';
+  const hint = document.createElement('p');
+  hint.className = 'annot-hint';
+  hint.textContent = 'Tap a hold to mark it, tap a circle to remove it. Pinch or scroll to zoom.';
+  foot.append(detectBtn, hint);
 
   const wrap = annotatedImage(photoId, photoV, () => markers, color);
   body.appendChild(wrap);
@@ -484,6 +493,47 @@ function openRouteImageEditor(
     }
     markers.push({ x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)), r: DEFAULT_MARKER_R });
     sync();
+  });
+
+  async function ensureImageLoaded(): Promise<void> {
+    if (img.complete && img.naturalWidth > 0) return;
+    await new Promise<void>((resolve, reject) => {
+      img.addEventListener('load', () => resolve(), { once: true });
+      img.addEventListener('error', () => reject(new Error('image load failed')), { once: true });
+    });
+  }
+
+  const colorWord = color.trim().toLowerCase();
+  detectBtn.addEventListener('click', async () => {
+    detectBtn.disabled = true;
+    const label = detectBtn.textContent;
+    detectBtn.textContent = 'Detecting… (first run downloads the model)';
+    try {
+      await ensureImageLoaded();
+      const { markers: found, total } = await detectHolds(img, colorHex(color));
+      let added = 0;
+      for (const m of found) {
+        if (markers.length >= MAX_MARKERS) break;
+        // Skip a detection that lands on an existing marker so re-running is safe.
+        const dup = markers.some((e) => Math.hypot(e.x - m.x, e.y - m.y) < Math.max(e.r, m.r));
+        if (dup) continue;
+        markers.push(m);
+        added++;
+      }
+      sync();
+      if (added > 0) {
+        toast(`Added ${added} ${colorWord} hold${added === 1 ? '' : 's'}. Tap to fix up.`);
+      } else if (total > 0) {
+        toast(`Detected ${total} holds but none matched ${colorWord || 'that color'}. Tap to mark them.`);
+      } else {
+        toast('No holds detected. Tap to mark them.');
+      }
+    } catch {
+      toast('Detection failed — mark holds by tapping instead.');
+    } finally {
+      detectBtn.disabled = false;
+      detectBtn.textContent = label;
+    }
   });
 
   cancelBtn.addEventListener('click', () => overlay.remove());
