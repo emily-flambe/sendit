@@ -1,6 +1,6 @@
 import { Context, Next } from 'hono';
 import { verifyToken } from '../auth';
-import type { Env } from '../types';
+import type { Env } from '../env';
 
 declare module 'hono' {
   interface ContextVariableMap {

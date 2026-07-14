@@ -1,9 +1,3 @@
-export interface Env {
-  DB: D1Database;
-  PHOTOS: R2Bucket;
-  JWT_SECRET: string;
-}
-
 export type Discipline = 'boulder' | 'top_rope' | 'lead' | 'autobelay';
 export type AttemptResult = 'send' | 'attempt';
 

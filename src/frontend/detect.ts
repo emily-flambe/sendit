@@ -1,4 +1,5 @@
 import type { RouteMarker } from './api';
+import { markerFromPolygon } from '../markers';
 
 // In-browser climbing-hold SEGMENTATION. FastSAM-s (YOLOv8-seg, class-agnostic
 // "segment everything"), int8-quantized to 12.6MB, run via onnxruntime-web/WASM.
@@ -368,18 +369,7 @@ export async function detectHolds(img: HTMLImageElement, targetHex: string): Pro
       return [Math.min(1, Math.max(0, nx)), Math.min(1, Math.max(0, ny))];
     });
 
-    let cxN = 0;
-    let cyN = 0;
-    for (const [px, py] of poly) {
-      cxN += px;
-      cyN += py;
-    }
-    cxN /= poly.length;
-    cyN /= poly.length;
-    let rN = 0;
-    for (const [px, py] of poly) rN = Math.max(rN, Math.hypot(px - cxN, py - cyN));
-
-    markers.push({ x: cxN, y: cyN, r: Math.min(0.12, Math.max(0.012, rN)), polygon: poly });
+    markers.push(markerFromPolygon(poly));
   }
 
   return { markers, total: dets.length };

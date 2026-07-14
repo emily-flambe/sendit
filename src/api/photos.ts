@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Context } from 'hono';
-import type { Env } from '../types';
+import type { Env } from '../env';
 import * as queries from '../db/queries';
 import { transformMarkers, type EditTransform } from '../markers';
 import { authMiddleware } from '../middleware/auth';
