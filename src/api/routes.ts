@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Env } from '../types';
 import * as queries from '../db/queries';
 import { authMiddleware } from '../middleware/auth';
-import { MAX_PHOTOS_PER_ROUTE, MAX_PHOTO_BYTES, PHOTO_CONTENT_TYPES } from './photos';
+import { MAX_PHOTOS_PER_ROUTE, photoR2Key, readPhotoUpload } from './photos';
 
 const routePatchSchema = z.object({
   name: z.string().trim().max(120).optional(),
@@ -60,7 +60,7 @@ routes.get('/:id', async (c) => {
     return c.json({ error: 'Route not found' }, 404);
   }
   const attempts = await queries.listAttempts(c.env.DB, c.get('userId'), route.id);
-  const photos = await queries.listPhotos(c.env.DB, c.get('userId'), route.id);
+  const photos = await queries.listRoutePhotos(c.env.DB, c.get('userId'), route.id);
   const route_image = await queries.getRouteImage(c.env.DB, c.get('userId'), route.id);
   return c.json({ route, attempts, photos, route_image });
 });
@@ -75,7 +75,7 @@ routes.put('/:id/image', async (c) => {
     return c.json({ error: 'Invalid route image fields' }, 400);
   }
   const photo = await queries.getPhoto(c.env.DB, c.get('userId'), parsed.data.photo_id);
-  if (!photo || photo.route_id !== route.id) {
+  if (!photo || !(await queries.isPhotoLinked(c.env.DB, route.id, photo.id))) {
     return c.json({ error: 'Photo not found on this route' }, 404);
   }
   const route_image = await queries.upsertRouteImage(c.env.DB, route.id, photo.id, parsed.data.markers);
@@ -106,56 +106,74 @@ routes.patch('/:id', async (c) => {
 });
 
 routes.delete('/:id', async (c) => {
-  // Grab photo keys before the row cascade wipes them, then clean up R2.
-  const photos = await queries.listPhotos(c.env.DB, c.get('userId'), c.req.param('id'));
+  // Photos live in the gallery, not on the route — deleting a route only
+  // cascades its links and annotation, never photo bytes.
   const deleted = await queries.deleteRoute(c.env.DB, c.get('userId'), c.req.param('id'));
   if (!deleted) {
     return c.json({ error: 'Route not found' }, 404);
   }
-  if (photos.length > 0) {
-    await c.env.PHOTOS.delete(photos.map((p) => p.r2_key));
-  }
   return c.json({ success: true });
 });
 
+// Upload a new photo straight onto a route: creates a gallery photo tagged
+// with the route's gym, then links it.
 routes.post('/:id/photos', async (c) => {
   const route = await queries.getRoute(c.env.DB, c.get('userId'), c.req.param('id'));
   if (!route) {
     return c.json({ error: 'Route not found' }, 404);
   }
-
-  const contentType = (c.req.header('Content-Type') ?? '').split(';')[0].trim().toLowerCase();
-  if (!PHOTO_CONTENT_TYPES.has(contentType)) {
-    return c.json({ error: 'Unsupported image type' }, 400);
-  }
-
-  const declaredLength = Number(c.req.header('Content-Length') ?? 0);
-  if (declaredLength > MAX_PHOTO_BYTES) {
-    return c.json({ error: 'Photo too large (10 MB max)' }, 413);
-  }
-
-  if ((await queries.countPhotos(c.env.DB, route.id)) >= MAX_PHOTOS_PER_ROUTE) {
+  if ((await queries.countRoutePhotoLinks(c.env.DB, route.id)) >= MAX_PHOTOS_PER_ROUTE) {
     return c.json({ error: `Route already has ${MAX_PHOTOS_PER_ROUTE} photos` }, 400);
   }
-
-  const body = await c.req.arrayBuffer();
-  if (body.byteLength === 0) {
-    return c.json({ error: 'Empty upload' }, 400);
-  }
-  if (body.byteLength > MAX_PHOTO_BYTES) {
-    return c.json({ error: 'Photo too large (10 MB max)' }, 413);
+  const upload = await readPhotoUpload(c);
+  if ('error' in upload) {
+    return c.json({ error: upload.error }, upload.status);
   }
 
   const photoId = crypto.randomUUID();
-  const r2Key = `photos/${route.id}/${photoId}`;
-  await c.env.PHOTOS.put(r2Key, body, { httpMetadata: { contentType } });
-  const photo = await queries.createPhoto(c.env.DB, route.id, {
+  const r2Key = photoR2Key(photoId);
+  await c.env.PHOTOS.put(r2Key, upload.body, { httpMetadata: { contentType: upload.contentType } });
+  const photo = await queries.createPhoto(c.env.DB, c.get('userId'), route.gym_id, {
     id: photoId,
     r2_key: r2Key,
-    content_type: contentType,
-    size: body.byteLength,
+    content_type: upload.contentType,
+    size: upload.body.byteLength,
   });
+  await queries.linkPhoto(c.env.DB, route.id, photo.id);
   return c.json({ photo }, 201);
+});
+
+// Link an existing gallery photo to a route.
+routes.put('/:id/photos/:photoId', async (c) => {
+  const route = await queries.getRoute(c.env.DB, c.get('userId'), c.req.param('id'));
+  if (!route) {
+    return c.json({ error: 'Route not found' }, 404);
+  }
+  const photo = await queries.getPhoto(c.env.DB, c.get('userId'), c.req.param('photoId'));
+  if (!photo) {
+    return c.json({ error: 'Photo not found' }, 404);
+  }
+  if (!(await queries.isPhotoLinked(c.env.DB, route.id, photo.id))) {
+    if ((await queries.countRoutePhotoLinks(c.env.DB, route.id)) >= MAX_PHOTOS_PER_ROUTE) {
+      return c.json({ error: `Route already has ${MAX_PHOTOS_PER_ROUTE} photos` }, 400);
+    }
+    await queries.linkPhoto(c.env.DB, route.id, photo.id);
+  }
+  return c.json({ photo });
+});
+
+// Unlink a photo from a route. The photo stays in the gallery; the route's
+// annotation survives too if it was drawn on this photo (it still renders).
+routes.delete('/:id/photos/:photoId', async (c) => {
+  const route = await queries.getRoute(c.env.DB, c.get('userId'), c.req.param('id'));
+  if (!route) {
+    return c.json({ error: 'Route not found' }, 404);
+  }
+  const unlinked = await queries.unlinkPhoto(c.env.DB, route.id, c.req.param('photoId'));
+  if (!unlinked) {
+    return c.json({ error: 'Photo not linked to this route' }, 404);
+  }
+  return c.json({ success: true });
 });
 
 routes.post('/:id/attempts', async (c) => {

@@ -59,12 +59,33 @@ export interface LogEntry {
   gym_name: string;
 }
 
-export interface RoutePhoto {
+export interface Photo {
   id: string;
-  route_id: string;
+  gym_id: string | null;
   content_type: string;
   size: number;
   created_at: number;
+  updated_at: number;
+}
+
+export interface PhotoWithLinks extends Photo {
+  link_count: number;
+}
+
+export interface LinkedRoute {
+  route_id: string;
+  name: string;
+  grade: string;
+  color: string;
+  has_annotation: number;
+}
+
+// Client-side description of a crop/rotate edit, normalized like markers.
+export interface PhotoEdit {
+  rotate: 0 | 1 | 2 | 3;
+  crop: { x: number; y: number; w: number; h: number };
+  width: number;
+  height: number;
 }
 
 export interface RouteMarker {
@@ -155,7 +176,7 @@ export const api = {
   createRoute: (gymId: string, fields: Partial<Route>) =>
     request<{ route: Route }>('POST', `/gyms/${gymId}/routes`, fields),
   getRoute: (id: string) =>
-    request<{ route: Route; attempts: Attempt[]; photos: RoutePhoto[]; route_image: RouteImage | null }>(
+    request<{ route: Route; attempts: Attempt[]; photos: Photo[]; route_image: RouteImage | null }>(
       'GET',
       `/routes/${id}`
     ),
@@ -171,8 +192,8 @@ export const api = {
     request<{ attempt: Attempt }>('PATCH', `/attempts/${id}`, fields),
   deleteAttempt: (id: string) => request<{ success: boolean }>('DELETE', `/attempts/${id}`),
 
-  uploadRoutePhoto: async (routeId: string, blob: Blob): Promise<{ photo: RoutePhoto }> => {
-    const res = await fetch(`/api/routes/${routeId}/photos`, {
+  uploadBlob: async <T>(path: string, blob: Blob): Promise<T> => {
+    const res = await fetch(`/api${path}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${getToken()}`, 'Content-Type': blob.type },
       body: blob,
@@ -181,10 +202,36 @@ export const api = {
     if (!res.ok) {
       throw new ApiError(res.status, typeof data.error === 'string' ? data.error : 'Upload failed');
     }
-    return data as unknown as { photo: RoutePhoto };
+    return data as T;
   },
-  fetchPhotoBlob: async (photoId: string): Promise<Blob> => {
-    const res = await fetch(`/api/photos/${photoId}`, {
+  uploadRoutePhoto: (routeId: string, blob: Blob) => api.uploadBlob<{ photo: Photo }>(`/routes/${routeId}/photos`, blob),
+  uploadGalleryPhoto: (blob: Blob, gymId: string | null) =>
+    api.uploadBlob<{ photo: Photo }>(`/photos${gymId ? `?gym=${encodeURIComponent(gymId)}` : ''}`, blob),
+  editPhoto: (photoId: string, blob: Blob, edit: PhotoEdit, mode: 'overwrite' | 'new') => {
+    const params = new URLSearchParams({
+      mode,
+      rotate: String(edit.rotate),
+      crop_x: String(edit.crop.x),
+      crop_y: String(edit.crop.y),
+      crop_w: String(edit.crop.w),
+      crop_h: String(edit.crop.h),
+      width: String(edit.width),
+      height: String(edit.height),
+    });
+    return api.uploadBlob<{ photo: Photo }>(`/photos/${photoId}/edit?${params}`, blob);
+  },
+  listGalleryPhotos: (gymId: string | null) =>
+    request<{ photos: PhotoWithLinks[] }>('GET', `/photos${gymId ? `?gym=${encodeURIComponent(gymId)}` : ''}`),
+  getPhotoInfo: (photoId: string) =>
+    request<{ photo: Photo; routes: LinkedRoute[] }>('GET', `/photos/${photoId}/info`),
+  updatePhotoGym: (photoId: string, gymId: string | null) =>
+    request<{ photo: Photo }>('PATCH', `/photos/${photoId}`, { gym_id: gymId }),
+  linkPhoto: (routeId: string, photoId: string) =>
+    request<{ photo: Photo }>('PUT', `/routes/${routeId}/photos/${photoId}`),
+  unlinkPhoto: (routeId: string, photoId: string) =>
+    request<{ success: boolean }>('DELETE', `/routes/${routeId}/photos/${photoId}`),
+  fetchPhotoBlob: async (photoId: string, version: number): Promise<Blob> => {
+    const res = await fetch(`/api/photos/${photoId}?v=${version}`, {
       headers: { Authorization: `Bearer ${getToken()}` },
     });
     if (!res.ok) {

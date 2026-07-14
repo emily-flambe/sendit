@@ -1,4 +1,15 @@
-import type { Attempt, Gym, Route, RouteImage, RouteMarker, RoutePhoto, RouteWithStats, User } from '../types';
+import type {
+  Attempt,
+  Gym,
+  LinkedRoute,
+  Photo,
+  PhotoWithLinks,
+  Route,
+  RouteImage,
+  RouteMarker,
+  RouteWithStats,
+  User,
+} from '../types';
 
 interface UserRow extends User {
   password_hash: string;
@@ -87,8 +98,8 @@ export async function listRoutes(
               COUNT(a.id) AS attempt_count,
               COALESCE(SUM(a.result = 'send'), 0) AS send_count,
               MAX(a.attempted_on) AS last_attempted_on,
-              (SELECT COUNT(*) FROM route_photos p WHERE p.route_id = r.id) AS photo_count,
-              (SELECT p.id FROM route_photos p WHERE p.route_id = r.id ORDER BY p.created_at LIMIT 1) AS first_photo_id
+              (SELECT COUNT(*) FROM route_photo_links l WHERE l.route_id = r.id) AS photo_count,
+              (SELECT l.photo_id FROM route_photo_links l WHERE l.route_id = r.id ORDER BY l.created_at LIMIT 1) AS first_photo_id
        FROM routes r
        JOIN gyms g ON g.id = r.gym_id
        LEFT JOIN attempts a ON a.route_id = r.id
@@ -274,35 +285,38 @@ export async function deleteAttempt(db: D1Database, userId: string, attemptId: s
   return true;
 }
 
-export async function listPhotos(db: D1Database, userId: string, routeId: string): Promise<RoutePhoto[]> {
+export async function listRoutePhotos(db: D1Database, userId: string, routeId: string): Promise<Photo[]> {
   const result = await db
     .prepare(
-      `SELECT p.* FROM route_photos p
-       JOIN routes r ON r.id = p.route_id
-       JOIN gyms g ON g.id = r.gym_id
-       WHERE p.route_id = ? AND g.user_id = ?
-       ORDER BY p.created_at`
+      `SELECT p.* FROM photos p
+       JOIN route_photo_links l ON l.photo_id = p.id
+       WHERE l.route_id = ? AND p.user_id = ?
+       ORDER BY l.created_at`
     )
     .bind(routeId, userId)
-    .all<RoutePhoto>();
+    .all<Photo>();
   return result.results;
 }
 
-export async function getPhoto(db: D1Database, userId: string, photoId: string): Promise<RoutePhoto | null> {
-  return db
-    .prepare(
-      `SELECT p.* FROM route_photos p
-       JOIN routes r ON r.id = p.route_id
-       JOIN gyms g ON g.id = r.gym_id
-       WHERE p.id = ? AND g.user_id = ?`
-    )
-    .bind(photoId, userId)
-    .first<RoutePhoto>();
+export async function listGalleryPhotos(db: D1Database, userId: string, gymId: string | null): Promise<PhotoWithLinks[]> {
+  const gymClause = gymId ? 'AND p.gym_id = ?' : '';
+  const stmt = db.prepare(
+    `SELECT p.*, (SELECT COUNT(*) FROM route_photo_links l WHERE l.photo_id = p.id) AS link_count
+     FROM photos p
+     WHERE p.user_id = ? ${gymClause}
+     ORDER BY p.created_at DESC`
+  );
+  const result = await (gymId ? stmt.bind(userId, gymId) : stmt.bind(userId)).all<PhotoWithLinks>();
+  return result.results;
 }
 
-export async function countPhotos(db: D1Database, routeId: string): Promise<number> {
+export async function getPhoto(db: D1Database, userId: string, photoId: string): Promise<Photo | null> {
+  return db.prepare('SELECT * FROM photos WHERE id = ? AND user_id = ?').bind(photoId, userId).first<Photo>();
+}
+
+export async function countRoutePhotoLinks(db: D1Database, routeId: string): Promise<number> {
   const row = await db
-    .prepare('SELECT COUNT(*) AS n FROM route_photos WHERE route_id = ?')
+    .prepare('SELECT COUNT(*) AS n FROM route_photo_links WHERE route_id = ?')
     .bind(routeId)
     .first<{ n: number }>();
   return row?.n ?? 0;
@@ -310,29 +324,119 @@ export async function countPhotos(db: D1Database, routeId: string): Promise<numb
 
 export async function createPhoto(
   db: D1Database,
-  routeId: string,
+  userId: string,
+  gymId: string | null,
   input: { id: string; r2_key: string; content_type: string; size: number }
-): Promise<RoutePhoto> {
-  const photo: RoutePhoto = {
+): Promise<Photo> {
+  const now = Date.now();
+  const photo: Photo = {
     id: input.id,
-    route_id: routeId,
+    user_id: userId,
+    gym_id: gymId,
     r2_key: input.r2_key,
     content_type: input.content_type,
     size: input.size,
-    created_at: Date.now(),
+    created_at: now,
+    updated_at: now,
   };
   await db
     .prepare(
-      `INSERT INTO route_photos (id, route_id, r2_key, content_type, size, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO photos (id, user_id, gym_id, r2_key, content_type, size, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .bind(photo.id, photo.route_id, photo.r2_key, photo.content_type, photo.size, photo.created_at)
+    .bind(
+      photo.id,
+      photo.user_id,
+      photo.gym_id,
+      photo.r2_key,
+      photo.content_type,
+      photo.size,
+      photo.created_at,
+      photo.updated_at
+    )
     .run();
   return photo;
 }
 
+export async function overwritePhoto(
+  db: D1Database,
+  photoId: string,
+  input: { r2_key: string; content_type: string; size: number }
+): Promise<number> {
+  const updatedAt = Date.now();
+  await db
+    .prepare('UPDATE photos SET r2_key = ?, content_type = ?, size = ?, updated_at = ? WHERE id = ?')
+    .bind(input.r2_key, input.content_type, input.size, updatedAt, photoId)
+    .run();
+  return updatedAt;
+}
+
+export async function updatePhotoGym(db: D1Database, photoId: string, gymId: string | null): Promise<void> {
+  await db.prepare('UPDATE photos SET gym_id = ? WHERE id = ?').bind(gymId, photoId).run();
+}
+
 export async function deletePhoto(db: D1Database, photoId: string): Promise<void> {
-  await db.prepare('DELETE FROM route_photos WHERE id = ?').bind(photoId).run();
+  await db.prepare('DELETE FROM photos WHERE id = ?').bind(photoId).run();
+}
+
+export async function linkPhoto(db: D1Database, routeId: string, photoId: string): Promise<void> {
+  await db
+    .prepare('INSERT OR IGNORE INTO route_photo_links (route_id, photo_id, created_at) VALUES (?, ?, ?)')
+    .bind(routeId, photoId, Date.now())
+    .run();
+}
+
+export async function isPhotoLinked(db: D1Database, routeId: string, photoId: string): Promise<boolean> {
+  const row = await db
+    .prepare('SELECT 1 AS one FROM route_photo_links WHERE route_id = ? AND photo_id = ?')
+    .bind(routeId, photoId)
+    .first<{ one: number }>();
+  return row !== null;
+}
+
+export async function unlinkPhoto(db: D1Database, routeId: string, photoId: string): Promise<boolean> {
+  const result = await db
+    .prepare('DELETE FROM route_photo_links WHERE route_id = ? AND photo_id = ?')
+    .bind(routeId, photoId)
+    .run();
+  return result.meta.changes > 0;
+}
+
+export async function listLinkedRoutes(db: D1Database, userId: string, photoId: string): Promise<LinkedRoute[]> {
+  const result = await db
+    .prepare(
+      `SELECT r.id AS route_id, r.name, r.grade, r.color,
+              EXISTS(SELECT 1 FROM route_images ri WHERE ri.route_id = r.id AND ri.photo_id = l.photo_id) AS has_annotation
+       FROM route_photo_links l
+       JOIN routes r ON r.id = l.route_id
+       JOIN gyms g ON g.id = r.gym_id
+       WHERE l.photo_id = ? AND g.user_id = ?
+       ORDER BY l.created_at`
+    )
+    .bind(photoId, userId)
+    .all<LinkedRoute>();
+  return result.results;
+}
+
+// Internal (no user scoping — callers verify photo ownership first): all
+// annotations drawn on a photo, for marker remapping when the photo is edited.
+export async function listRouteImagesByPhoto(db: D1Database, photoId: string): Promise<RouteImage[]> {
+  const result = await db
+    .prepare('SELECT * FROM route_images WHERE photo_id = ?')
+    .bind(photoId)
+    .all<{ route_id: string; photo_id: string; markers: string; updated_at: number }>();
+  return result.results.map((row) => ({ ...row, markers: JSON.parse(row.markers) as RouteMarker[] }));
+}
+
+export async function setRouteImageMarkers(db: D1Database, routeId: string, markers: RouteMarker[]): Promise<void> {
+  await db
+    .prepare('UPDATE route_images SET markers = ?, updated_at = ? WHERE route_id = ?')
+    .bind(JSON.stringify(markers), Date.now(), routeId)
+    .run();
+}
+
+export async function deleteRouteImageRow(db: D1Database, routeId: string): Promise<void> {
+  await db.prepare('DELETE FROM route_images WHERE route_id = ?').bind(routeId).run();
 }
 
 interface RouteImageRow {
@@ -401,8 +505,8 @@ export async function listAllRoutes(
               COUNT(a.id) AS attempt_count,
               COALESCE(SUM(a.result = 'send'), 0) AS send_count,
               MAX(a.attempted_on) AS last_attempted_on,
-              (SELECT COUNT(*) FROM route_photos p WHERE p.route_id = r.id) AS photo_count,
-              (SELECT p.id FROM route_photos p WHERE p.route_id = r.id ORDER BY p.created_at LIMIT 1) AS first_photo_id
+              (SELECT COUNT(*) FROM route_photo_links l WHERE l.route_id = r.id) AS photo_count,
+              (SELECT l.photo_id FROM route_photo_links l WHERE l.route_id = r.id ORDER BY l.created_at LIMIT 1) AS first_photo_id
        FROM routes r
        JOIN gyms g ON g.id = r.gym_id
        LEFT JOIN attempts a ON a.route_id = r.id

@@ -54,13 +54,29 @@ export interface RouteWithStats extends Route {
   first_photo_id: string | null;
 }
 
-export interface RoutePhoto {
+// Gallery photo: owned by a user, optionally tagged with a gym, linked to
+// any number of routes via route_photo_links.
+export interface Photo {
   id: string;
-  route_id: string;
+  user_id: string;
+  gym_id: string | null;
   r2_key: string;
   content_type: string;
   size: number;
   created_at: number;
+  updated_at: number;
+}
+
+export interface PhotoWithLinks extends Photo {
+  link_count: number;
+}
+
+export interface LinkedRoute {
+  route_id: string;
+  name: string;
+  grade: string;
+  color: string;
+  has_annotation: number;
 }
 
 // Normalized to the image: x/y in [0,1], r as a fraction of image width.
