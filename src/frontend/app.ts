@@ -7,6 +7,8 @@ import {
   type Discipline,
   type Gym,
   type LogEntry,
+  type RouteImage,
+  type RouteMarker,
   type RoutePhoto,
   type RouteWithGym,
   type Route,
@@ -230,6 +232,177 @@ function openLightbox(photo: RoutePhoto, onDelete: () => void): void {
       fail(err);
     }
   });
+}
+
+// ---------- route image (annotated topo) ----------
+
+const DEFAULT_MARKER_R = 0.02;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function drawMarkers(svg: SVGSVGElement, markers: RouteMarker[], w: number, h: number, color: string): void {
+  svg.textContent = '';
+  for (const m of markers) {
+    const r = m.r * w;
+    for (const [stroke, width] of [
+      ['rgba(255,255,255,0.9)', r * 0.45],
+      [color, r * 0.22],
+    ] as const) {
+      const circle = document.createElementNS(SVG_NS, 'circle');
+      circle.setAttribute('cx', String(m.x * w));
+      circle.setAttribute('cy', String(m.y * h));
+      circle.setAttribute('r', String(r));
+      circle.setAttribute('fill', 'none');
+      circle.setAttribute('stroke', stroke);
+      circle.setAttribute('stroke-width', String(width));
+      svg.appendChild(circle);
+    }
+  }
+}
+
+// Photo + marker overlay. Markers are normalized; the SVG viewBox uses the
+// image's natural pixel size so circles stay circular at any display size.
+function annotatedImage(photoId: string, markers: () => RouteMarker[], color: string): HTMLDivElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'annot-wrap';
+  const img = document.createElement('img');
+  img.dataset.photo = photoId;
+  img.alt = 'Route image';
+  const svg = document.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
+  wrap.append(img, svg);
+  img.addEventListener('load', () => {
+    svg.setAttribute('viewBox', `0 0 ${img.naturalWidth} ${img.naturalHeight}`);
+    drawMarkers(svg, markers(), img.naturalWidth, img.naturalHeight, colorHex(color));
+  });
+  return wrap;
+}
+
+function annotOverlay(title: string): { overlay: HTMLDivElement; head: HTMLDivElement; body: HTMLDivElement; foot: HTMLDivElement } {
+  const overlay = document.createElement('div');
+  overlay.className = 'annot-editor';
+  const head = document.createElement('div');
+  head.className = 'annot-editor-head';
+  const titleEl = document.createElement('span');
+  titleEl.className = 'annot-title';
+  titleEl.textContent = title;
+  head.appendChild(titleEl);
+  const body = document.createElement('div');
+  body.className = 'annot-editor-body';
+  const foot = document.createElement('div');
+  foot.className = 'annot-editor-foot';
+  overlay.append(head, body, foot);
+  document.body.appendChild(overlay);
+  return { overlay, head, body, foot };
+}
+
+function openRouteImageViewer(image: RouteImage, color: string): void {
+  const { overlay, head, body } = annotOverlay('Route image');
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn ghost';
+  closeBtn.textContent = 'Close';
+  closeBtn.addEventListener('click', () => overlay.remove());
+  head.prepend(closeBtn);
+  body.appendChild(annotatedImage(image.photo_id, () => image.markers, color));
+  hydratePhotos(overlay);
+}
+
+function openRouteImageEditor(
+  routeId: string,
+  photoId: string,
+  initial: RouteMarker[],
+  color: string,
+  onSaved: () => void
+): void {
+  const markers: RouteMarker[] = initial.map((m) => ({ ...m }));
+
+  const { overlay, head, body, foot } = annotOverlay('Mark the holds');
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn ghost';
+  cancelBtn.textContent = 'Cancel';
+  const saveBtn = document.createElement('button');
+  saveBtn.className = 'btn primary';
+  head.prepend(cancelBtn);
+  head.appendChild(saveBtn);
+  foot.textContent = 'Tap a hold to mark it. Tap a circle to remove it.';
+
+  const wrap = annotatedImage(photoId, () => markers, color);
+  body.appendChild(wrap);
+  hydratePhotos(overlay);
+  const img = wrap.querySelector('img')!;
+  const svg = wrap.querySelector('svg')!;
+
+  function sync(): void {
+    saveBtn.textContent = `Save (${markers.length})`;
+    saveBtn.disabled = markers.length === 0;
+    if (img.naturalWidth) {
+      drawMarkers(svg, markers, img.naturalWidth, img.naturalHeight, colorHex(color));
+    }
+  }
+  sync();
+  img.addEventListener('load', sync);
+
+  svg.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const nx = (e.clientX - rect.left) / rect.width;
+    const ny = (e.clientY - rect.top) / rect.height;
+    // Hit-test in screen pixels (with finger-sized slop) so removal works at
+    // any zoom; newest markers win ties.
+    for (let i = markers.length - 1; i >= 0; i--) {
+      const m = markers[i];
+      const dx = (m.x - nx) * rect.width;
+      const dy = (m.y - ny) * rect.height;
+      const hitRadius = m.r * rect.width + 8;
+      if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+        markers.splice(i, 1);
+        sync();
+        return;
+      }
+    }
+    markers.push({ x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)), r: DEFAULT_MARKER_R });
+    sync();
+  });
+
+  cancelBtn.addEventListener('click', () => overlay.remove());
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    try {
+      await api.setRouteImage(routeId, photoId, markers);
+      overlay.remove();
+      toast('Route image saved.');
+      onSaved();
+    } catch (err) {
+      saveBtn.disabled = false;
+      fail(err);
+    }
+  });
+}
+
+function openRouteImagePicker(photos: RoutePhoto[], onPick: (photo: RoutePhoto) => void): void {
+  const { overlay, head, body } = annotOverlay('Pick a photo to annotate');
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn ghost';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.addEventListener('click', () => overlay.remove());
+  head.prepend(cancelBtn);
+
+  const grid = document.createElement('div');
+  grid.className = 'annot-picker-grid';
+  for (const photo of photos) {
+    const btn = document.createElement('button');
+    btn.className = 'photo-thumb';
+    const img = document.createElement('img');
+    img.dataset.photo = photo.id;
+    img.alt = 'Route photo';
+    btn.appendChild(img);
+    btn.addEventListener('click', () => {
+      overlay.remove();
+      onPick(photo);
+    });
+    grid.appendChild(btn);
+  }
+  body.appendChild(grid);
+  hydratePhotos(overlay);
 }
 
 function setActiveGym(id: string | null): void {
@@ -838,8 +1011,9 @@ async function renderRouteDetail(routeId: string): Promise<void> {
   let route: Route;
   let attempts: Attempt[];
   let photos: RoutePhoto[];
+  let routeImage: RouteImage | null;
   try {
-    ({ route, attempts, photos } = await api.getRoute(routeId));
+    ({ route, attempts, photos, route_image: routeImage } = await api.getRoute(routeId));
   } catch (err) {
     fail(err);
     window.location.hash = '#/routes';
@@ -900,6 +1074,20 @@ async function renderRouteDetail(routeId: string): Promise<void> {
           </label>
         </div>
       </section>
+      <section class="route-image">
+        <div class="section-head">
+          <h3>Route image</h3>
+          ${
+            routeImage
+              ? `<span class="section-actions">
+                  <button class="linkish" id="ri-edit">Edit</button>
+                  <button class="linkish danger" id="ri-remove">Remove</button>
+                </span>`
+              : ''
+          }
+        </div>
+        ${routeImage ? '<div id="ri-view"></div>' : '<button class="annot-create" id="ri-create">Create route image</button>'}
+      </section>
       ${route.notes ? `<section class="route-notes"><h3>Notes</h3><p>${esc(route.notes)}</p></section>` : ''}
       <section class="log-actions" style="--route-color:${colorHex(route.color)}">
         <button class="btn send-btn" id="attempt-btn">Log attempt</button>
@@ -925,6 +1113,38 @@ async function renderRouteDetail(routeId: string): Promise<void> {
     </main>`,
     'routes'
   );
+
+  const rerender = () => void renderRouteDetail(route.id);
+  const editImage = (photoId: string, initial: RouteMarker[]) =>
+    openRouteImageEditor(route.id, photoId, initial, route.color, rerender);
+
+  if (routeImage) {
+    const image = routeImage;
+    const view = document.getElementById('ri-view')!;
+    const wrap = annotatedImage(image.photo_id, () => image.markers, route.color);
+    wrap.addEventListener('click', () => openRouteImageViewer(image, route.color));
+    view.appendChild(wrap);
+    document.getElementById('ri-edit')!.addEventListener('click', () => editImage(image.photo_id, image.markers));
+    document.getElementById('ri-remove')!.addEventListener('click', async () => {
+      if (!confirm('Remove the route image? The photo itself stays.')) return;
+      try {
+        await api.deleteRouteImage(route.id);
+        rerender();
+      } catch (err) {
+        fail(err);
+      }
+    });
+  } else {
+    document.getElementById('ri-create')!.addEventListener('click', () => {
+      if (photos.length === 0) {
+        toast('Add a photo first, then mark the holds.');
+      } else if (photos.length === 1) {
+        editImage(photos[0].id, []);
+      } else {
+        openRouteImagePicker(photos, (photo) => editImage(photo.id, []));
+      }
+    });
+  }
 
   hydratePhotos();
 

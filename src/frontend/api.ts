@@ -67,6 +67,19 @@ export interface RoutePhoto {
   created_at: number;
 }
 
+export interface RouteMarker {
+  x: number;
+  y: number;
+  r: number;
+}
+
+export interface RouteImage {
+  route_id: string;
+  photo_id: string;
+  markers: RouteMarker[];
+  updated_at: number;
+}
+
 export interface Attempt {
   id: string;
   route_id: string;
@@ -142,7 +155,13 @@ export const api = {
   createRoute: (gymId: string, fields: Partial<Route>) =>
     request<{ route: Route }>('POST', `/gyms/${gymId}/routes`, fields),
   getRoute: (id: string) =>
-    request<{ route: Route; attempts: Attempt[]; photos: RoutePhoto[] }>('GET', `/routes/${id}`),
+    request<{ route: Route; attempts: Attempt[]; photos: RoutePhoto[]; route_image: RouteImage | null }>(
+      'GET',
+      `/routes/${id}`
+    ),
+  setRouteImage: (routeId: string, photoId: string, markers: RouteMarker[]) =>
+    request<{ route_image: RouteImage }>('PUT', `/routes/${routeId}/image`, { photo_id: photoId, markers }),
+  deleteRouteImage: (routeId: string) => request<{ success: boolean }>('DELETE', `/routes/${routeId}/image`),
   updateRoute: (id: string, fields: Partial<Route>) => request<{ route: Route }>('PATCH', `/routes/${id}`, fields),
   deleteRoute: (id: string) => request<{ success: boolean }>('DELETE', `/routes/${id}`),
 

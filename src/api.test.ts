@@ -326,6 +326,138 @@ describe('route photos', () => {
   });
 });
 
+describe('route images', () => {
+  let token: string;
+  let gymId: string;
+
+  const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+  const MARKERS = [
+    { x: 0.41, y: 0.18, r: 0.02 },
+    { x: 0.44, y: 0.31, r: 0.02 },
+  ];
+
+  async function createRouteWithPhoto(): Promise<{ routeId: string; photoId: string }> {
+    const created = await call('POST', `/api/gyms/${gymId}/routes`, { grade: '5.10b', color: 'purple' }, token);
+    expect(created.status).toBe(201);
+    const routeId = created.data.route.id as string;
+    const res = await app.request(
+      `/api/routes/${routeId}/photos`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${token}` },
+        body: JPEG_BYTES,
+      },
+      env
+    );
+    const data = (await res.json()) as Json;
+    expect(res.status).toBe(201);
+    return { routeId, photoId: data.photo.id as string };
+  }
+
+  beforeAll(async () => {
+    token = await registerUser('annotator');
+    const gym = await call('POST', '/api/gyms', { name: 'Topo Gym' }, token);
+    gymId = gym.data.gym.id;
+  });
+
+  it('sets, reads, updates, and removes a route image', async () => {
+    const { routeId, photoId } = await createRouteWithPhoto();
+
+    const bare = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(bare.data.route_image).toBeNull();
+
+    const set = await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers: MARKERS }, token);
+    expect(set.status).toBe(200);
+    expect(set.data.route_image.markers).toEqual(MARKERS);
+
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.route_image.photo_id).toBe(photoId);
+    expect(detail.data.route_image.markers).toEqual(MARKERS);
+
+    const updated = await call(
+      'PUT',
+      `/api/routes/${routeId}/image`,
+      { photo_id: photoId, markers: [{ x: 0.5, y: 0.5, r: 0.03 }] },
+      token
+    );
+    expect(updated.status).toBe(200);
+    expect(updated.data.route_image.markers).toHaveLength(1);
+
+    const del = await call('DELETE', `/api/routes/${routeId}/image`, undefined, token);
+    expect(del.status).toBe(200);
+    const after = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(after.data.route_image).toBeNull();
+
+    const delAgain = await call('DELETE', `/api/routes/${routeId}/image`, undefined, token);
+    expect(delAgain.status).toBe(404);
+  });
+
+  it('rejects invalid markers', async () => {
+    const { routeId, photoId } = await createRouteWithPhoto();
+
+    for (const markers of [
+      [],
+      [{ x: 1.5, y: 0.5, r: 0.02 }],
+      [{ x: 0.5, y: -0.1, r: 0.02 }],
+      [{ x: 0.5, y: 0.5, r: 0 }],
+      [{ x: 0.5, y: 0.5, r: 0.5 }],
+      Array.from({ length: 101 }, () => ({ x: 0.5, y: 0.5, r: 0.02 })),
+      [{ x: '0.5', y: 0.5, r: 0.02 }],
+    ]) {
+      const res = await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers }, token);
+      expect(res.status, JSON.stringify(markers).slice(0, 60)).toBe(400);
+    }
+  });
+
+  it("rejects a photo that isn't on the route", async () => {
+    const { routeId } = await createRouteWithPhoto();
+    const other = await createRouteWithPhoto();
+
+    const wrongRoute = await call(
+      'PUT',
+      `/api/routes/${routeId}/image`,
+      { photo_id: other.photoId, markers: MARKERS },
+      token
+    );
+    expect(wrongRoute.status).toBe(404);
+
+    const noPhoto = await call(
+      'PUT',
+      `/api/routes/${routeId}/image`,
+      { photo_id: 'nonexistent', markers: MARKERS },
+      token
+    );
+    expect(noPhoto.status).toBe(404);
+  });
+
+  it("hides one user's route image from another", async () => {
+    const { routeId, photoId } = await createRouteWithPhoto();
+    await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers: MARKERS }, token);
+
+    const snoop = await registerUser('topo-snoop');
+    const put = await call(
+      'PUT',
+      `/api/routes/${routeId}/image`,
+      { photo_id: photoId, markers: MARKERS },
+      snoop
+    );
+    expect(put.status).toBe(404);
+    const del = await call('DELETE', `/api/routes/${routeId}/image`, undefined, snoop);
+    expect(del.status).toBe(404);
+  });
+
+  it('removes the route image when its photo is deleted', async () => {
+    const { routeId, photoId } = await createRouteWithPhoto();
+    await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers: MARKERS }, token);
+
+    const del = await call('DELETE', `/api/photos/${photoId}`, undefined, token);
+    expect(del.status).toBe(200);
+
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.route_image).toBeNull();
+  });
+});
+
 describe('cross-gym listing and log feed', () => {
   let token: string;
   let gymA: string;
