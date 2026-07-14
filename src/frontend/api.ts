@@ -93,6 +93,7 @@ export interface RouteMarker {
   x: number;
   y: number;
   r: number;
+  polygon?: [number, number][];
 }
 
 export interface RouteImage {

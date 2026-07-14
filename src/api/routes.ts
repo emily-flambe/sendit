@@ -21,10 +21,16 @@ const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD'
 export const MAX_ROUTE_IMAGE_MARKERS = 100;
 
 // Markers are normalized to the image (x/y in [0,1], r as fraction of width).
+// An optional polygon (auto-detected hold outline) is a ring of [x, y] points.
 const markerSchema = z.object({
   x: z.number().min(0).max(1),
   y: z.number().min(0).max(1),
   r: z.number().gt(0).max(0.25),
+  polygon: z
+    .array(z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)]))
+    .min(3)
+    .max(80)
+    .optional(),
 });
 
 const routeImageSchema = z.object({

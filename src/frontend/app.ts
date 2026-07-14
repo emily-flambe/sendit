@@ -263,6 +263,26 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 function drawMarkers(svg: SVGSVGElement, markers: RouteMarker[], w: number, h: number, color: string): void {
   svg.textContent = '';
   for (const m of markers) {
+    if (m.polygon && m.polygon.length >= 3) {
+      // Auto-detected hold: draw its outline as a filled silhouette. A white
+      // casing stroke under the colored one keeps it visible on any hold.
+      const pts = m.polygon.map(([px, py]) => `${px * w},${py * h}`).join(' ');
+      const casing = document.createElementNS(SVG_NS, 'polygon');
+      casing.setAttribute('points', pts);
+      casing.setAttribute('fill', 'none');
+      casing.setAttribute('stroke', 'rgba(255,255,255,0.9)');
+      casing.setAttribute('stroke-width', String(m.r * w * 0.32));
+      casing.setAttribute('stroke-linejoin', 'round');
+      const poly = document.createElementNS(SVG_NS, 'polygon');
+      poly.setAttribute('points', pts);
+      poly.setAttribute('fill', color);
+      poly.setAttribute('fill-opacity', '0.4');
+      poly.setAttribute('stroke', color);
+      poly.setAttribute('stroke-width', String(m.r * w * 0.16));
+      poly.setAttribute('stroke-linejoin', 'round');
+      svg.append(casing, poly);
+      continue;
+    }
     const r = m.r * w;
     for (const [stroke, width] of [
       ['rgba(255,255,255,0.9)', r * 0.45],
@@ -506,8 +526,21 @@ function openRouteImageEditor(
   const colorWord = color.trim().toLowerCase();
   detectBtn.addEventListener('click', async () => {
     detectBtn.disabled = true;
-    const label = detectBtn.textContent;
-    detectBtn.textContent = 'Detecting… (first run downloads the model)';
+
+    // Full-cover spinner: inference runs in a worker so this keeps animating,
+    // and it makes the multi-second wait legible instead of feeling dead.
+    const spinner = document.createElement('div');
+    spinner.className = 'detect-spinner';
+    const dot = document.createElement('div');
+    dot.className = 'detect-dot';
+    const msg = document.createElement('p');
+    msg.textContent = `Finding ${colorWord || ''} holds…`;
+    const sub = document.createElement('p');
+    sub.className = 'detect-sub';
+    sub.textContent = 'First run downloads the detector (~20MB), then it is instant.';
+    spinner.append(dot, msg, sub);
+    overlay.appendChild(spinner);
+
     try {
       await ensureImageLoaded();
       const { markers: found, total } = await detectHolds(img, colorHex(color));
@@ -522,17 +555,17 @@ function openRouteImageEditor(
       }
       sync();
       if (added > 0) {
-        toast(`Added ${added} ${colorWord} hold${added === 1 ? '' : 's'}. Tap to fix up.`);
+        toast(`Outlined ${added} ${colorWord} hold${added === 1 ? '' : 's'}. Tap any to remove.`);
       } else if (total > 0) {
-        toast(`Detected ${total} holds but none matched ${colorWord || 'that color'}. Tap to mark them.`);
+        toast(`Found ${total} holds but none matched ${colorWord || 'that color'}. Tap to mark them.`);
       } else {
         toast('No holds detected. Tap to mark them.');
       }
     } catch {
       toast('Detection failed — mark holds by tapping instead.');
     } finally {
+      spinner.remove();
       detectBtn.disabled = false;
-      detectBtn.textContent = label;
     }
   });
 
