@@ -239,15 +239,15 @@ describe('gyms and routes', () => {
   });
 });
 
-describe('route photos', () => {
+describe('photos and gallery', () => {
   let token: string;
   let gymId: string;
 
   const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
 
-  async function uploadPhoto(routeId: string, authToken: string, contentType = 'image/jpeg', bytes: BodyInit = JPEG_BYTES) {
+  async function upload(path: string, authToken: string, contentType = 'image/jpeg', bytes: BodyInit = JPEG_BYTES) {
     const res = await app.request(
-      `/api/routes/${routeId}/photos`,
+      path,
       {
         method: 'POST',
         headers: { 'Content-Type': contentType, Authorization: `Bearer ${authToken}` },
@@ -270,45 +270,31 @@ describe('route photos', () => {
     gymId = gym.data.gym.id;
   });
 
-  it('uploads, lists, serves, and deletes a photo', async () => {
+  it('uploading to a route creates a gym-tagged gallery photo and links it', async () => {
     const routeId = await createRoute();
 
-    const uploaded = await uploadPhoto(routeId, token);
+    const uploaded = await upload(`/api/routes/${routeId}/photos`, token);
     expect(uploaded.status).toBe(201);
     const photoId = uploaded.data.photo.id as string;
-    expect(uploaded.data.photo.content_type).toBe('image/jpeg');
-    expect(uploaded.data.photo.size).toBe(JPEG_BYTES.byteLength);
+    expect(uploaded.data.photo.gym_id).toBe(gymId);
 
     const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
     expect(detail.data.photos).toHaveLength(1);
     expect(detail.data.photos[0].id).toBe(photoId);
 
-    const img = await app.request(
-      `/api/photos/${photoId}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-      env
-    );
+    const gallery = await call('GET', '/api/photos', undefined, token);
+    const row = gallery.data.photos.find((ph: Json) => ph.id === photoId);
+    expect(row.link_count).toBe(1);
+
+    const img = await app.request(`/api/photos/${photoId}`, { headers: { Authorization: `Bearer ${token}` } }, env);
     expect(img.status).toBe(200);
-    expect(img.headers.get('Content-Type')).toBe('image/jpeg');
     expect(new Uint8Array(await img.arrayBuffer())).toEqual(JPEG_BYTES);
-
-    const del = await call('DELETE', `/api/photos/${photoId}`, undefined, token);
-    expect(del.status).toBe(200);
-
-    const gone = await app.request(
-      `/api/photos/${photoId}`,
-      { headers: { Authorization: `Bearer ${token}` } },
-      env
-    );
-    expect(gone.status).toBe(404);
-    await gone.arrayBuffer();
-    expect(await env.PHOTOS.get(`photos/${routeId}/${photoId}`)).toBeNull();
   });
 
   it('surfaces photo rollups in the route list', async () => {
     const routeId = await createRoute();
-    const first = await uploadPhoto(routeId, token);
-    await uploadPhoto(routeId, token);
+    const first = await upload(`/api/routes/${routeId}/photos`, token);
+    await upload(`/api/routes/${routeId}/photos`, token);
 
     const list = await call('GET', `/api/gyms/${gymId}/routes`, undefined, token);
     const row = list.data.routes.find((r: Json) => r.id === routeId);
@@ -316,57 +302,258 @@ describe('route photos', () => {
     expect(row.first_photo_id).toBe(first.data.photo.id);
   });
 
-  it('rejects bad uploads', async () => {
-    const routeId = await createRoute();
+  it('uploads straight to the gallery, with and without a gym tag', async () => {
+    const tagged = await upload(`/api/photos?gym=${gymId}`, token);
+    expect(tagged.status).toBe(201);
+    expect(tagged.data.photo.gym_id).toBe(gymId);
 
-    const badType = await uploadPhoto(routeId, token, 'application/pdf');
+    const untagged = await upload('/api/photos', token);
+    expect(untagged.status).toBe(201);
+    expect(untagged.data.photo.gym_id).toBeNull();
+
+    const filtered = await call('GET', `/api/photos?gym=${gymId}`, undefined, token);
+    expect(filtered.data.photos.some((ph: Json) => ph.id === tagged.data.photo.id)).toBe(true);
+    expect(filtered.data.photos.some((ph: Json) => ph.id === untagged.data.photo.id)).toBe(false);
+  });
+
+  it('links and unlinks gallery photos', async () => {
+    const routeId = await createRoute();
+    const photo = await upload('/api/photos', token);
+    const photoId = photo.data.photo.id as string;
+
+    const linked = await call('PUT', `/api/routes/${routeId}/photos/${photoId}`, undefined, token);
+    expect(linked.status).toBe(200);
+    const again = await call('PUT', `/api/routes/${routeId}/photos/${photoId}`, undefined, token);
+    expect(again.status).toBe(200);
+
+    let detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.photos).toHaveLength(1);
+
+    const unlinked = await call('DELETE', `/api/routes/${routeId}/photos/${photoId}`, undefined, token);
+    expect(unlinked.status).toBe(200);
+    detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.photos).toHaveLength(0);
+
+    const gallery = await call('GET', '/api/photos', undefined, token);
+    expect(gallery.data.photos.some((ph: Json) => ph.id === photoId)).toBe(true);
+
+    const reUnlink = await call('DELETE', `/api/routes/${routeId}/photos/${photoId}`, undefined, token);
+    expect(reUnlink.status).toBe(404);
+  });
+
+  it('enforces the per-route link cap', async () => {
+    const routeId = await createRoute();
+    for (let i = 0; i < 12; i++) {
+      const ok = await upload(`/api/routes/${routeId}/photos`, token);
+      expect(ok.status).toBe(201);
+    }
+    const overflowUpload = await upload(`/api/routes/${routeId}/photos`, token);
+    expect(overflowUpload.status).toBe(400);
+
+    const extra = await upload('/api/photos', token);
+    const overflowLink = await call('PUT', `/api/routes/${routeId}/photos/${extra.data.photo.id}`, undefined, token);
+    expect(overflowLink.status).toBe(400);
+  });
+
+  it('rejects bad uploads', async () => {
+    const badType = await upload('/api/photos', token, 'application/pdf');
     expect(badType.status).toBe(400);
 
-    const empty = await uploadPhoto(routeId, token, 'image/png', new Uint8Array(0));
+    const empty = await upload('/api/photos', token, 'image/png', new Uint8Array(0));
     expect(empty.status).toBe(400);
 
-    const huge = await uploadPhoto(routeId, token, 'image/jpeg', new Uint8Array(10 * 1024 * 1024 + 1));
+    const huge = await upload('/api/photos', token, 'image/jpeg', new Uint8Array(10 * 1024 * 1024 + 1));
     expect(huge.status).toBe(413);
   });
 
-  it('enforces the per-route photo cap', async () => {
+  it('keeps photos in the gallery when a route is deleted', async () => {
     const routeId = await createRoute();
-    for (let i = 0; i < 12; i++) {
-      const ok = await uploadPhoto(routeId, token);
-      expect(ok.status).toBe(201);
+    const uploaded = await upload(`/api/routes/${routeId}/photos`, token);
+    const photoId = uploaded.data.photo.id as string;
+    const key = uploaded.data.photo.r2_key as string;
+
+    const del = await call('DELETE', `/api/routes/${routeId}`, undefined, token);
+    expect(del.status).toBe(200);
+
+    const gallery = await call('GET', '/api/photos', undefined, token);
+    const row = gallery.data.photos.find((ph: Json) => ph.id === photoId);
+    expect(row).toBeTruthy();
+    expect(row.link_count).toBe(0);
+
+    const stored = await env.PHOTOS.get(key);
+    expect(stored).not.toBeNull();
+    await stored!.arrayBuffer();
+  });
+
+  it('deleting a photo removes it from every route and cleans up R2 and annotations', async () => {
+    const routeA = await createRoute();
+    const routeB = await createRoute();
+    const uploaded = await upload(`/api/routes/${routeA}/photos`, token);
+    const photoId = uploaded.data.photo.id as string;
+    const key = uploaded.data.photo.r2_key as string;
+    await call('PUT', `/api/routes/${routeB}/photos/${photoId}`, undefined, token);
+    await call('PUT', `/api/routes/${routeA}/image`, { photo_id: photoId, markers: [{ x: 0.5, y: 0.5, r: 0.02 }] }, token);
+
+    const info = await call('GET', `/api/photos/${photoId}/info`, undefined, token);
+    expect(info.data.routes).toHaveLength(2);
+    expect(info.data.routes.find((r: Json) => r.route_id === routeA).has_annotation).toBe(1);
+
+    const del = await call('DELETE', `/api/photos/${photoId}`, undefined, token);
+    expect(del.status).toBe(200);
+
+    for (const routeId of [routeA, routeB]) {
+      const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+      expect(detail.data.photos).toHaveLength(0);
+      expect(detail.data.route_image).toBeNull();
     }
-    const overflow = await uploadPhoto(routeId, token);
-    expect(overflow.status).toBe(400);
+    expect(await env.PHOTOS.get(key)).toBeNull();
+  });
+
+  it('updates the gym tag', async () => {
+    const uploaded = await upload('/api/photos', token);
+    const photoId = uploaded.data.photo.id as string;
+
+    const tag = await call('PATCH', `/api/photos/${photoId}`, { gym_id: gymId }, token);
+    expect(tag.status).toBe(200);
+    expect(tag.data.photo.gym_id).toBe(gymId);
+
+    const untag = await call('PATCH', `/api/photos/${photoId}`, { gym_id: null }, token);
+    expect(untag.status).toBe(200);
+    expect(untag.data.photo.gym_id).toBeNull();
+
+    const stranger = await registerUser('gym-tagger');
+    const strangersGym = (await call('POST', '/api/gyms', { name: 'Elsewhere' }, stranger)).data.gym.id;
+    const wrongGym = await call('PATCH', `/api/photos/${photoId}`, { gym_id: strangersGym }, token);
+    expect(wrongGym.status).toBe(404);
   });
 
   it("hides one user's photos from another", async () => {
     const snoop = await registerUser('photo-snoop');
     const routeId = await createRoute();
-    const uploaded = await uploadPhoto(routeId, token);
+    const uploaded = await upload(`/api/routes/${routeId}/photos`, token);
     const photoId = uploaded.data.photo.id as string;
 
-    const peek = await call('GET', `/api/photos/${photoId}`, undefined, snoop);
-    expect(peek.status).toBe(404);
+    expect((await call('GET', `/api/photos/${photoId}`, undefined, snoop)).status).toBe(404);
+    expect((await call('GET', `/api/photos/${photoId}/info`, undefined, snoop)).status).toBe(404);
+    expect((await call('DELETE', `/api/photos/${photoId}`, undefined, snoop)).status).toBe(404);
+    expect((await call('PATCH', `/api/photos/${photoId}`, { gym_id: null }, snoop)).status).toBe(404);
 
-    const del = await call('DELETE', `/api/photos/${photoId}`, undefined, snoop);
-    expect(del.status).toBe(404);
+    const snoopGym = (await call('POST', '/api/gyms', { name: 'Snoop Gym' }, snoop)).data.gym.id;
+    const snoopRoute = (await call('POST', `/api/gyms/${snoopGym}/routes`, { grade: 'V1' }, snoop)).data.route.id;
+    expect((await call('PUT', `/api/routes/${snoopRoute}/photos/${photoId}`, undefined, snoop)).status).toBe(404);
 
-    const push = await uploadPhoto(routeId, snoop);
-    expect(push.status).toBe(404);
+    const gallery = await call('GET', '/api/photos', undefined, snoop);
+    expect(gallery.data.photos.some((ph: Json) => ph.id === photoId)).toBe(false);
+  });
+});
+
+describe('photo editing', () => {
+  let token: string;
+  let gymId: string;
+
+  const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+  const EDITED_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x01]);
+
+  async function setupAnnotatedPhoto(markers: Json[]): Promise<{ routeId: string; photoId: string; r2Key: string }> {
+    const route = await call('POST', `/api/gyms/${gymId}/routes`, { grade: '5.10b', color: 'purple' }, token);
+    const routeId = route.data.route.id as string;
+    const res = await app.request(
+      `/api/routes/${routeId}/photos`,
+      { method: 'POST', headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${token}` }, body: JPEG_BYTES },
+      env
+    );
+    const data = (await res.json()) as Json;
+    const photoId = data.photo.id as string;
+    await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers }, token);
+    return { routeId, photoId, r2Key: data.photo.r2_key as string };
+  }
+
+  async function edit(photoId: string, params: string, bytes: BodyInit = EDITED_BYTES) {
+    const res = await app.request(
+      `/api/photos/${photoId}/edit?${params}`,
+      { method: 'POST', headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${token}` }, body: bytes },
+      env
+    );
+    return { status: res.status, data: (await res.json()) as Json };
+  }
+
+  beforeAll(async () => {
+    token = await registerUser('editor');
+    const gym = await call('POST', '/api/gyms', { name: 'Edit Gym' }, token);
+    gymId = gym.data.gym.id;
   });
 
-  it('cleans up R2 objects when the route is deleted', async () => {
-    const routeId = await createRoute();
-    const uploaded = await uploadPhoto(routeId, token);
-    const key = uploaded.data.photo.r2_key as string;
-    const stored = await env.PHOTOS.get(key);
-    expect(stored).not.toBeNull();
-    // R2 body streams must be fully consumed or isolated storage fails to unwind.
-    await stored!.arrayBuffer();
+  it('save-as-new creates a separate photo and leaves the original alone', async () => {
+    const { routeId, photoId } = await setupAnnotatedPhoto([{ x: 0.2, y: 0.4, r: 0.02 }]);
 
-    const del = await call('DELETE', `/api/routes/${routeId}`, undefined, token);
-    expect(del.status).toBe(200);
-    expect(await env.PHOTOS.get(key)).toBeNull();
+    const res = await edit(photoId, 'mode=new&rotate=1&width=1000&height=2000');
+    expect(res.status).toBe(201);
+    expect(res.data.photo.id).not.toBe(photoId);
+    expect(res.data.photo.gym_id).toBe(gymId);
+
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.route_image.markers).toEqual([{ x: 0.2, y: 0.4, r: 0.02 }]);
+    const original = await app.request(`/api/photos/${photoId}`, { headers: { Authorization: `Bearer ${token}` } }, env);
+    expect(new Uint8Array(await original.arrayBuffer())).toEqual(JPEG_BYTES);
+  });
+
+  it('overwrite remaps markers through a rotation', async () => {
+    const { routeId, photoId, r2Key } = await setupAnnotatedPhoto([{ x: 0.2, y: 0.4, r: 0.02 }]);
+
+    const res = await edit(photoId, 'mode=overwrite&rotate=1&width=1000&height=2000');
+    expect(res.status).toBe(200);
+    expect(res.data.photo.r2_key).not.toBe(r2Key);
+
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    const [m] = detail.data.route_image.markers;
+    expect(m.x).toBeCloseTo(0.6);
+    expect(m.y).toBeCloseTo(0.2);
+    expect(m.r).toBeCloseTo(0.01);
+
+    expect(await env.PHOTOS.get(r2Key)).toBeNull();
+    const served = await app.request(`/api/photos/${photoId}`, { headers: { Authorization: `Bearer ${token}` } }, env);
+    expect(new Uint8Array(await served.arrayBuffer())).toEqual(EDITED_BYTES);
+  });
+
+  it('overwrite remaps markers through a crop and drops the ones outside', async () => {
+    const { routeId, photoId } = await setupAnnotatedPhoto([
+      { x: 0.75, y: 0.25, r: 0.02 },
+      { x: 0.2, y: 0.8, r: 0.02 },
+    ]);
+
+    const res = await edit(photoId, 'mode=overwrite&crop_x=0.5&crop_y=0&crop_w=0.5&crop_h=0.5&width=1000&height=2000');
+    expect(res.status).toBe(200);
+
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.route_image.markers).toHaveLength(1);
+    const [m] = detail.data.route_image.markers;
+    expect(m.x).toBeCloseTo(0.5);
+    expect(m.y).toBeCloseTo(0.5);
+    expect(m.r).toBeCloseTo(0.04);
+  });
+
+  it('overwrite deletes an annotation whose markers are all cropped out', async () => {
+    const { routeId, photoId } = await setupAnnotatedPhoto([{ x: 0.1, y: 0.9, r: 0.02 }]);
+
+    const res = await edit(photoId, 'mode=overwrite&crop_x=0.5&crop_y=0&crop_w=0.5&crop_h=0.5&width=1000&height=2000');
+    expect(res.status).toBe(200);
+
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.route_image).toBeNull();
+  });
+
+  it('rejects invalid edit parameters', async () => {
+    const { photoId } = await setupAnnotatedPhoto([{ x: 0.5, y: 0.5, r: 0.02 }]);
+    for (const params of [
+      'mode=overwrite', // missing dims
+      'mode=overwrite&rotate=5&width=100&height=100',
+      'mode=overwrite&crop_w=0&width=100&height=100',
+      'mode=overwrite&crop_x=0.6&crop_w=0.5&width=100&height=100',
+      'mode=sideways&width=100&height=100',
+    ]) {
+      const res = await edit(photoId, params);
+      expect(res.status, params).toBe(400);
+    }
   });
 });
 

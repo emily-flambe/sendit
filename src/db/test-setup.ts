@@ -57,17 +57,32 @@ CREATE TABLE IF NOT EXISTS attempts (
 
 CREATE INDEX IF NOT EXISTS idx_attempts_route ON attempts(route_id, attempted_on DESC, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS route_photos (
+CREATE TABLE IF NOT EXISTS photos (
   id TEXT PRIMARY KEY,
-  route_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  gym_id TEXT,
   r2_key TEXT NOT NULL,
   content_type TEXT NOT NULL,
   size INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
-  FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (gym_id) REFERENCES gyms(id) ON DELETE SET NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_route_photos_route ON route_photos(route_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_photos_user ON photos(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_photos_gym ON photos(gym_id);
+
+CREATE TABLE IF NOT EXISTS route_photo_links (
+  route_id TEXT NOT NULL,
+  photo_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (route_id, photo_id),
+  FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE,
+  FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_route_photo_links_photo ON route_photo_links(photo_id);
 
 CREATE TABLE IF NOT EXISTS route_images (
   route_id TEXT PRIMARY KEY,
@@ -75,7 +90,7 @@ CREATE TABLE IF NOT EXISTS route_images (
   markers TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE,
-  FOREIGN KEY (photo_id) REFERENCES route_photos(id) ON DELETE CASCADE
+  FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_route_images_photo ON route_images(photo_id);
