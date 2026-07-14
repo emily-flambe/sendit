@@ -18,6 +18,20 @@ const routePatchSchema = z.object({
 
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
 
+export const MAX_ROUTE_IMAGE_MARKERS = 100;
+
+// Markers are normalized to the image (x/y in [0,1], r as fraction of width).
+const markerSchema = z.object({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  r: z.number().gt(0).max(0.25),
+});
+
+const routeImageSchema = z.object({
+  photo_id: z.string().trim().min(1),
+  markers: z.array(markerSchema).min(1).max(MAX_ROUTE_IMAGE_MARKERS),
+});
+
 const attemptSchema = z.object({
   attempted_on: dateString,
   result: z.enum(['send', 'attempt']),
@@ -47,7 +61,33 @@ routes.get('/:id', async (c) => {
   }
   const attempts = await queries.listAttempts(c.env.DB, c.get('userId'), route.id);
   const photos = await queries.listPhotos(c.env.DB, c.get('userId'), route.id);
-  return c.json({ route, attempts, photos });
+  const route_image = await queries.getRouteImage(c.env.DB, c.get('userId'), route.id);
+  return c.json({ route, attempts, photos, route_image });
+});
+
+routes.put('/:id/image', async (c) => {
+  const route = await queries.getRoute(c.env.DB, c.get('userId'), c.req.param('id'));
+  if (!route) {
+    return c.json({ error: 'Route not found' }, 404);
+  }
+  const parsed = routeImageSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ error: 'Invalid route image fields' }, 400);
+  }
+  const photo = await queries.getPhoto(c.env.DB, c.get('userId'), parsed.data.photo_id);
+  if (!photo || photo.route_id !== route.id) {
+    return c.json({ error: 'Photo not found on this route' }, 404);
+  }
+  const route_image = await queries.upsertRouteImage(c.env.DB, route.id, photo.id, parsed.data.markers);
+  return c.json({ route_image });
+});
+
+routes.delete('/:id/image', async (c) => {
+  const deleted = await queries.deleteRouteImage(c.env.DB, c.get('userId'), c.req.param('id'));
+  if (!deleted) {
+    return c.json({ error: 'Route image not found' }, 404);
+  }
+  return c.json({ success: true });
 });
 
 routes.patch('/:id', async (c) => {

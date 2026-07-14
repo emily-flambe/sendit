@@ -1,4 +1,4 @@
-import type { Attempt, Gym, Route, RoutePhoto, RouteWithStats, User } from '../types';
+import type { Attempt, Gym, Route, RouteImage, RouteMarker, RoutePhoto, RouteWithStats, User } from '../types';
 
 interface UserRow extends User {
   password_hash: string;
@@ -333,6 +333,59 @@ export async function createPhoto(
 
 export async function deletePhoto(db: D1Database, photoId: string): Promise<void> {
   await db.prepare('DELETE FROM route_photos WHERE id = ?').bind(photoId).run();
+}
+
+interface RouteImageRow {
+  route_id: string;
+  photo_id: string;
+  markers: string;
+  updated_at: number;
+}
+
+export async function getRouteImage(db: D1Database, userId: string, routeId: string): Promise<RouteImage | null> {
+  const row = await db
+    .prepare(
+      `SELECT ri.* FROM route_images ri
+       JOIN routes r ON r.id = ri.route_id
+       JOIN gyms g ON g.id = r.gym_id
+       WHERE ri.route_id = ? AND g.user_id = ?`
+    )
+    .bind(routeId, userId)
+    .first<RouteImageRow>();
+  if (!row) return null;
+  return { ...row, markers: JSON.parse(row.markers) as RouteMarker[] };
+}
+
+export async function upsertRouteImage(
+  db: D1Database,
+  routeId: string,
+  photoId: string,
+  markers: RouteMarker[]
+): Promise<RouteImage> {
+  const image: RouteImage = {
+    route_id: routeId,
+    photo_id: photoId,
+    markers,
+    updated_at: Date.now(),
+  };
+  await db
+    .prepare(
+      `INSERT INTO route_images (route_id, photo_id, markers, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(route_id) DO UPDATE SET
+         photo_id = excluded.photo_id,
+         markers = excluded.markers,
+         updated_at = excluded.updated_at`
+    )
+    .bind(image.route_id, image.photo_id, JSON.stringify(image.markers), image.updated_at)
+    .run();
+  return image;
+}
+
+export async function deleteRouteImage(db: D1Database, userId: string, routeId: string): Promise<boolean> {
+  const existing = await getRouteImage(db, userId, routeId);
+  if (!existing) return false;
+  await db.prepare('DELETE FROM route_images WHERE route_id = ?').bind(routeId).run();
+  return true;
 }
 
 export async function listAllRoutes(

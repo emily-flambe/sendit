@@ -62,3 +62,18 @@ export interface RoutePhoto {
   size: number;
   created_at: number;
 }
+
+// Normalized to the image: x/y in [0,1], r as a fraction of image width.
+// Objects (not tuples) so future fields (kind, source) need no migration.
+export interface RouteMarker {
+  x: number;
+  y: number;
+  r: number;
+}
+
+export interface RouteImage {
+  route_id: string;
+  photo_id: string;
+  markers: RouteMarker[];
+  updated_at: number;
+}
