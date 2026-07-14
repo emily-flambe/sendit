@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import type { Env } from '../types';
+import type { Env } from '../env';
 import { hashPassword, verifyPassword, createToken } from '../auth';
 import { createUser, getUserByUsername, getUserById } from '../db/queries';
 import { authMiddleware } from '../middleware/auth';

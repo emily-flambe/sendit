@@ -17,6 +17,7 @@ import {
   type Route,
 } from './api';
 import { detectHolds } from './detect';
+import { markerFromPolygon } from '../markers';
 
 const GYM_KEY = 'sendit_gym';
 
@@ -258,51 +259,149 @@ function openLightbox(photo: Photo, routeId: string, onChange: () => void): void
 
 const DEFAULT_MARKER_R = 0.02;
 const MAX_MARKERS = 100; // mirrors the API's per-image marker cap
+const MAX_POLY_POINTS = 80; // mirrors the API's per-polygon vertex cap
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
-function drawMarkers(svg: SVGSVGElement, markers: RouteMarker[], w: number, h: number, color: string): void {
-  svg.textContent = '';
+function svgEl<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string>): SVGElementTagNameMap[K] {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+// One black shape per hold in the spotlight mask; the black stroke dilates the
+// region so the hold sits fully inside the bright zone.
+function maskShape(m: RouteMarker, w: number, h: number, dilate: number): SVGElement {
+  if (m.polygon && m.polygon.length >= 3) {
+    return svgEl('polygon', {
+      points: m.polygon.map(([px, py]) => `${px * w},${py * h}`).join(' '),
+      fill: 'black',
+      stroke: 'black',
+      'stroke-width': String(dilate),
+      'stroke-linejoin': 'round',
+    });
+  }
+  return svgEl('circle', {
+    cx: String(m.x * w),
+    cy: String(m.y * h),
+    r: String(m.r * w + dilate / 2),
+    fill: 'black',
+  });
+}
+
+let spotlightSeq = 0;
+
+// The focus effect: a dimmed/blurred/desaturated copy of the photo covers
+// everything except the hold regions, which are punched out of it (feathered)
+// via a luminance mask. All natural-pixel units, so it survives resize/zoom.
+function drawSpotlight(svg: SVGSVGElement, markers: RouteMarker[], w: number, h: number, src: string): void {
+  const uid = `sp${spotlightSeq++}`;
+  const feather = w * 0.006;
+  const dilate = w * 0.02;
+
+  const defs = svgEl('defs', {});
+  const dim = svgEl('filter', { id: `${uid}-dim` });
+  dim.appendChild(svgEl('feGaussianBlur', { stdDeviation: String(w * 0.004) }));
+  dim.appendChild(svgEl('feColorMatrix', { type: 'saturate', values: '0.5' }));
+  const transfer = svgEl('feComponentTransfer', {});
+  for (const fn of ['feFuncR', 'feFuncG', 'feFuncB'] as const) {
+    transfer.appendChild(svgEl(fn, { type: 'linear', slope: '0.45' }));
+  }
+  dim.appendChild(transfer);
+
+  const featherF = svgEl('filter', { id: `${uid}-feather` });
+  featherF.appendChild(svgEl('feGaussianBlur', { stdDeviation: String(feather) }));
+
+  const mask = svgEl('mask', { id: `${uid}-mask`, maskUnits: 'userSpaceOnUse', x: '0', y: '0', width: String(w), height: String(h) });
+  mask.appendChild(svgEl('rect', { width: String(w), height: String(h), fill: 'white' }));
+  const holes = svgEl('g', { filter: `url(#${uid}-feather)` });
+  for (const m of markers) holes.appendChild(maskShape(m, w, h, dilate));
+  mask.appendChild(holes);
+
+  defs.append(dim, featherF, mask);
+
+  const image = svgEl('image', {
+    href: src,
+    width: String(w),
+    height: String(h),
+    filter: `url(#${uid}-dim)`,
+    mask: `url(#${uid}-mask)`,
+    preserveAspectRatio: 'none',
+  });
+  svg.append(defs, image);
+}
+
+type MarkerMode = 'edit' | 'focus';
+
+// Callers clear the svg first; this only appends, so the spotlight layer and
+// in-progress trace can compose with it.
+function drawMarkers(svg: SVGSVGElement, markers: RouteMarker[], w: number, h: number, color: string, mode: MarkerMode): void {
   for (const m of markers) {
     if (m.polygon && m.polygon.length >= 3) {
-      // Auto-detected hold: draw its outline as a filled silhouette. A white
-      // casing stroke under the colored one keeps it visible on any hold.
       const pts = m.polygon.map(([px, py]) => `${px * w},${py * h}`).join(' ');
-      const casing = document.createElementNS(SVG_NS, 'polygon');
-      casing.setAttribute('points', pts);
-      casing.setAttribute('fill', 'none');
-      casing.setAttribute('stroke', 'rgba(255,255,255,0.9)');
-      casing.setAttribute('stroke-width', String(m.r * w * 0.32));
-      casing.setAttribute('stroke-linejoin', 'round');
-      const poly = document.createElementNS(SVG_NS, 'polygon');
-      poly.setAttribute('points', pts);
-      poly.setAttribute('fill', color);
-      poly.setAttribute('fill-opacity', '0.4');
-      poly.setAttribute('stroke', color);
-      poly.setAttribute('stroke-width', String(m.r * w * 0.16));
-      poly.setAttribute('stroke-linejoin', 'round');
-      svg.append(casing, poly);
+      if (mode === 'focus') {
+        // The spotlight already carries the emphasis; just a thin identity rim.
+        svg.appendChild(svgEl('polygon', {
+          points: pts,
+          fill: 'none',
+          stroke: color,
+          'stroke-opacity': '0.85',
+          'stroke-width': String(Math.max(w * 0.0015, m.r * w * 0.06)),
+          'stroke-linejoin': 'round',
+        }));
+        continue;
+      }
+      // Editor: filled silhouette. A white casing stroke under the colored one
+      // keeps it visible on any hold.
+      svg.appendChild(svgEl('polygon', {
+        points: pts,
+        fill: 'none',
+        stroke: 'rgba(255,255,255,0.9)',
+        'stroke-width': String(m.r * w * 0.32),
+        'stroke-linejoin': 'round',
+      }));
+      svg.appendChild(svgEl('polygon', {
+        points: pts,
+        fill: color,
+        'fill-opacity': '0.4',
+        stroke: color,
+        'stroke-width': String(m.r * w * 0.16),
+        'stroke-linejoin': 'round',
+      }));
       continue;
     }
     const r = m.r * w;
-    for (const [stroke, width] of [
-      ['rgba(255,255,255,0.9)', r * 0.45],
-      [color, r * 0.22],
-    ] as const) {
-      const circle = document.createElementNS(SVG_NS, 'circle');
-      circle.setAttribute('cx', String(m.x * w));
-      circle.setAttribute('cy', String(m.y * h));
-      circle.setAttribute('r', String(r));
-      circle.setAttribute('fill', 'none');
-      circle.setAttribute('stroke', stroke);
-      circle.setAttribute('stroke-width', String(width));
-      svg.appendChild(circle);
+    const rings: readonly (readonly [string, number])[] =
+      mode === 'focus'
+        ? [[color, Math.max(w * 0.0015, r * 0.12)]]
+        : [
+            ['rgba(255,255,255,0.9)', r * 0.45],
+            [color, r * 0.22],
+          ];
+    for (const [stroke, width] of rings) {
+      svg.appendChild(svgEl('circle', {
+        cx: String(m.x * w),
+        cy: String(m.y * h),
+        r: String(r),
+        fill: 'none',
+        stroke,
+        'stroke-width': String(width),
+      }));
     }
   }
 }
 
 // Photo + marker overlay. Markers are normalized; the SVG viewBox uses the
 // image's natural pixel size so circles stay circular at any display size.
-function annotatedImage(photoId: string, photoV: number, markers: () => RouteMarker[], color: string): HTMLDivElement {
+// With focus=true the saved route image renders spotlit — holds bright and
+// sharp, the rest of the wall dimmed and blurred — and the outlines become a
+// separate layer (off by default; the spotlight IS the final image).
+function annotatedImage(
+  photoId: string,
+  photoV: number,
+  markers: () => RouteMarker[],
+  color: string,
+  opts: { focus?: boolean; outlines?: () => boolean } = {}
+): { wrap: HTMLDivElement; rerender: () => void } {
   const wrap = document.createElement('div');
   wrap.className = 'annot-wrap';
   const img = document.createElement('img');
@@ -311,11 +410,21 @@ function annotatedImage(photoId: string, photoV: number, markers: () => RouteMar
   img.alt = 'Route image';
   const svg = document.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
   wrap.append(img, svg);
-  img.addEventListener('load', () => {
-    svg.setAttribute('viewBox', `0 0 ${img.naturalWidth} ${img.naturalHeight}`);
-    drawMarkers(svg, markers(), img.naturalWidth, img.naturalHeight, colorHex(color));
-  });
-  return wrap;
+  const rerender = () => {
+    if (!img.naturalWidth) return;
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    svg.textContent = '';
+    if (opts.focus) {
+      if (markers().length > 0) drawSpotlight(svg, markers(), w, h, img.src);
+      if (opts.outlines?.()) drawMarkers(svg, markers(), w, h, colorHex(color), 'focus');
+    } else {
+      drawMarkers(svg, markers(), w, h, colorHex(color), 'edit');
+    }
+  };
+  img.addEventListener('load', rerender);
+  return { wrap, rerender };
 }
 
 // setPointerCapture throws for pointers the browser doesn't know about
@@ -444,7 +553,20 @@ function openRouteImageViewer(image: RouteImage, photoV: number, color: string):
   closeBtn.textContent = 'Close';
   closeBtn.addEventListener('click', () => overlay.remove());
   head.prepend(closeBtn);
-  const wrap = annotatedImage(image.photo_id, photoV, () => image.markers, color);
+  let showOutlines = false;
+  const outlineBtn = document.createElement('button');
+  outlineBtn.className = 'btn ghost';
+  outlineBtn.textContent = 'Outlines';
+  head.appendChild(outlineBtn);
+  const { wrap, rerender } = annotatedImage(image.photo_id, photoV, () => image.markers, color, {
+    focus: true,
+    outlines: () => showOutlines,
+  });
+  outlineBtn.addEventListener('click', () => {
+    showOutlines = !showOutlines;
+    outlineBtn.textContent = showOutlines ? 'Outlines ✓' : 'Outlines';
+    rerender();
+  });
   body.appendChild(wrap);
   wireZoomAndTap(body, wrap, null);
   hydratePhotos(overlay);
@@ -471,27 +593,104 @@ function openRouteImageEditor(
 
   const detectBtn = document.createElement('button');
   detectBtn.className = 'btn ghost detect-btn';
-  detectBtn.textContent = '✨ Auto-detect holds';
+  detectBtn.textContent = '✨ Auto-detect';
+  const traceBtn = document.createElement('button');
+  traceBtn.className = 'btn ghost detect-btn';
+  traceBtn.textContent = '⬠ Draw shape';
+  const previewBtn = document.createElement('button');
+  previewBtn.className = 'btn ghost detect-btn';
+  previewBtn.textContent = '◐ Preview';
+  const btnRow = document.createElement('div');
+  btnRow.className = 'annot-btn-row';
+  btnRow.append(detectBtn, traceBtn, previewBtn);
   const hint = document.createElement('p');
   hint.className = 'annot-hint';
-  hint.textContent = 'Tap a hold to mark it, tap a circle to remove it. Pinch or scroll to zoom.';
-  foot.append(detectBtn, hint);
+  foot.append(btnRow, hint);
 
-  const wrap = annotatedImage(photoId, photoV, () => markers, color);
+  const { wrap } = annotatedImage(photoId, photoV, () => markers, color);
   body.appendChild(wrap);
   hydratePhotos(overlay);
   const img = wrap.querySelector('img')!;
   const svg = wrap.querySelector('svg')!;
 
+  // Tap-to-trace state: while non-null, taps append outline vertices instead
+  // of adding/removing markers.
+  let trace: [number, number][] | null = null;
+  let preview = false;
+
+  function syncHint(): void {
+    if (trace) {
+      hint.textContent =
+        trace.length < 3
+          ? 'Tap around the hold’s edge to outline it.'
+          : 'Keep tapping, or tap the first point (or Done) to close the shape.';
+    } else if (preview) {
+      hint.textContent = 'This is how the route image will look. Taps still edit.';
+    } else {
+      hint.textContent = 'Tap a hold to mark it, tap a mark to remove it. Pinch or scroll to zoom.';
+    }
+  }
+
+  function drawTrace(w: number, h: number): void {
+    if (!trace || trace.length === 0) return;
+    const pts = trace.map(([px, py]) => `${px * w},${py * h}`).join(' ');
+    if (trace.length > 1) {
+      svg.appendChild(svgEl('polyline', {
+        points: pts,
+        fill: 'none',
+        stroke: 'rgba(255,255,255,0.9)',
+        'stroke-width': String(w * 0.004),
+        'stroke-dasharray': `${w * 0.01} ${w * 0.006}`,
+        'stroke-linejoin': 'round',
+      }));
+    }
+    trace.forEach(([px, py], i) => {
+      svg.appendChild(svgEl('circle', {
+        cx: String(px * w),
+        cy: String(py * h),
+        r: String(w * (i === 0 ? 0.012 : 0.006)),
+        fill: i === 0 ? 'rgba(255,255,255,0.25)' : 'white',
+        stroke: colorHex(color),
+        'stroke-width': String(w * 0.003),
+      }));
+    });
+  }
+
   function sync(): void {
-    saveBtn.textContent = `Save (${markers.length})`;
-    saveBtn.disabled = markers.length === 0;
+    if (trace) {
+      saveBtn.textContent = trace.length >= 3 ? 'Done' : 'Save';
+      saveBtn.disabled = trace.length < 3;
+    } else {
+      saveBtn.textContent = `Save (${markers.length})`;
+      saveBtn.disabled = markers.length === 0;
+    }
+    traceBtn.textContent = trace ? '↩ Undo point' : '⬠ Draw shape';
+    previewBtn.textContent = preview ? '◐ Preview ✓' : '◐ Preview';
+    previewBtn.disabled = trace !== null;
+    detectBtn.disabled = trace !== null;
+    cancelBtn.textContent = trace ? 'Cancel shape' : 'Cancel';
+    syncHint();
     if (img.naturalWidth) {
-      drawMarkers(svg, markers, img.naturalWidth, img.naturalHeight, colorHex(color));
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      svg.textContent = '';
+      if (preview) {
+        // Preview shows the final image: spotlight only, no outline layer.
+        if (markers.length > 0) drawSpotlight(svg, markers, w, h, img.src);
+      } else {
+        drawMarkers(svg, markers, w, h, colorHex(color), 'edit');
+        drawTrace(w, h);
+      }
     }
   }
   sync();
   img.addEventListener('load', sync);
+
+  function closeTrace(): void {
+    if (trace && trace.length >= 3) markers.push(markerFromPolygon(trace.slice(0, MAX_POLY_POINTS)));
+    trace = null;
+    sync();
+  }
 
   // svg's client rect reflects the zoom transform, so normalized coordinates
   // come out right at any zoom level.
@@ -500,6 +699,23 @@ function openRouteImageEditor(
     if (rect.width === 0 || cx < rect.left || cx > rect.right || cy < rect.top || cy > rect.bottom) return;
     const nx = (cx - rect.left) / rect.width;
     const ny = (cy - rect.top) / rect.height;
+
+    if (trace) {
+      // Tapping the first vertex closes the shape.
+      if (trace.length >= 3) {
+        const [fx, fy] = trace[0];
+        if (Math.hypot((fx - nx) * rect.width, (fy - ny) * rect.height) < 14) {
+          closeTrace();
+          return;
+        }
+      }
+      if (trace.length < MAX_POLY_POINTS) {
+        trace.push([Math.min(1, Math.max(0, nx)), Math.min(1, Math.max(0, ny))]);
+      }
+      sync();
+      return;
+    }
+
     for (let i = markers.length - 1; i >= 0; i--) {
       const m = markers[i];
       const dx = (m.x - nx) * rect.width;
@@ -512,6 +728,21 @@ function openRouteImageEditor(
       }
     }
     markers.push({ x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)), r: DEFAULT_MARKER_R });
+    sync();
+  });
+
+  traceBtn.addEventListener('click', () => {
+    if (trace) {
+      trace.pop(); // undo last point
+    } else {
+      trace = [];
+      preview = false;
+    }
+    sync();
+  });
+
+  previewBtn.addEventListener('click', () => {
+    preview = !preview;
     sync();
   });
 
@@ -569,8 +800,19 @@ function openRouteImageEditor(
     }
   });
 
-  cancelBtn.addEventListener('click', () => overlay.remove());
+  cancelBtn.addEventListener('click', () => {
+    if (trace) {
+      trace = null;
+      sync();
+      return;
+    }
+    overlay.remove();
+  });
   saveBtn.addEventListener('click', async () => {
+    if (trace) {
+      closeTrace();
+      return;
+    }
     saveBtn.disabled = true;
     try {
       await api.setRouteImage(routeId, photoId, markers);
@@ -1763,7 +2005,7 @@ async function renderRouteDetail(routeId: string): Promise<void> {
   if (routeImage) {
     const image = routeImage;
     const view = document.getElementById('ri-view')!;
-    const wrap = annotatedImage(image.photo_id, photoVersion(image.photo_id), () => image.markers, route.color);
+    const { wrap } = annotatedImage(image.photo_id, photoVersion(image.photo_id), () => image.markers, route.color, { focus: true });
     wrap.addEventListener('click', () => openRouteImageViewer(image, photoVersion(image.photo_id), route.color));
     view.appendChild(wrap);
     document.getElementById('ri-edit')!.addEventListener('click', () => editImage(image.photo_id, image.markers));

@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type { Env } from './types';
+import type { Env } from './env';
 import authApi from './api/auth';
 import gymsApi from './api/gyms';
 import routesApi from './api/routes';
