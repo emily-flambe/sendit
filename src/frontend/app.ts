@@ -676,11 +676,16 @@ async function openImageEditor(photo: Photo, annotatedRoutes: number, onDone: ()
       return;
     }
     try {
-      await api.editPhoto(photo.id, blob, edit, mode);
-      if (mode === 'overwrite') purgePhotoUrls(photo.id);
+      const result = await api.editPhoto(photo.id, blob, edit, mode);
       overlay.remove();
-      toast(mode === 'overwrite' ? 'Photo updated.' : 'Saved as a new photo.');
-      onDone();
+      if (mode === 'overwrite') {
+        purgePhotoUrls(photo.id);
+        toast('Photo updated.');
+        onDone();
+      } else {
+        toast('Saved as a new photo.');
+        window.location.hash = `#/photo/${result.photo.id}`;
+      }
     } catch (err) {
       fail(err);
     }
@@ -812,6 +817,7 @@ async function renderPhotoDetail(photoId: string): Promise<void> {
       </label>
       <section class="log-actions">
         <button class="btn primary wide" id="photo-edit">Edit image</button>
+        <button class="btn ghost wide" id="photo-add-route">Add to a route</button>
         <button class="btn ghost wide" id="photo-new-route">Create route from this photo</button>
       </section>
       <section class="history">
@@ -845,6 +851,66 @@ async function renderPhotoDetail(photoId: string): Promise<void> {
 
   document.getElementById('photo-new-route')!.addEventListener('click', () => {
     window.location.hash = `#/new?photo=${photo.id}`;
+  });
+
+  document.getElementById('photo-add-route')!.addEventListener('click', async () => {
+    let all: RouteWithGym[];
+    try {
+      all = (await api.listAllRoutes(false)).routes;
+    } catch (err) {
+      fail(err);
+      return;
+    }
+    const linked = new Set(routes.map((r) => r.route_id));
+    // Same gym when the photo is tagged; anywhere when it isn't.
+    const candidates = all.filter((r) => !linked.has(r.id) && (!photo.gym_id || r.gym_id === photo.gym_id));
+    if (candidates.length === 0) {
+      toast('No unlinked routes for this gym. Create one from the photo instead.');
+      return;
+    }
+    const { overlay, head, body } = annotOverlay('Add to a route');
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn ghost';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => overlay.remove());
+    head.prepend(cancelBtn);
+
+    const list = document.createElement('div');
+    list.className = 'route-pick-list';
+    for (const r of candidates) {
+      const btn = document.createElement('button');
+      btn.className = 'route-card route-pick';
+      const tape = document.createElement('span');
+      tape.className = 'tape';
+      tape.style.background = colorHex(r.color);
+      const cardBody = document.createElement('span');
+      cardBody.className = 'route-card-body';
+      const top = document.createElement('span');
+      top.className = 'route-card-top';
+      const title = document.createElement('strong');
+      title.textContent = routeTitle(r);
+      top.appendChild(title);
+      const meta = document.createElement('span');
+      meta.className = 'route-card-meta';
+      meta.textContent = [r.gym_name, r.wall].filter(Boolean).join(' · ');
+      cardBody.append(top, meta);
+      const grade = document.createElement('span');
+      grade.className = 'route-card-grade';
+      grade.textContent = r.grade;
+      btn.append(tape, cardBody, grade);
+      btn.addEventListener('click', async () => {
+        try {
+          await api.linkPhoto(r.id, photo.id);
+          overlay.remove();
+          toast(`Added to ${routeTitle(r)}.`);
+          void renderPhotoDetail(photo.id);
+        } catch (err) {
+          fail(err);
+        }
+      });
+      list.appendChild(btn);
+    }
+    body.appendChild(list);
   });
 
   document.getElementById('photo-delete')!.addEventListener('click', async () => {
@@ -1060,7 +1126,7 @@ async function renderLog(): Promise<void> {
           ['grade', 'By grade'],
         ]
       )}
-      ${items || '<p class="empty">Nothing logged yet. Go climb something and brag about it here.</p>'}
+      ${items || '<p class="empty">Nothing logged yet.</p>'}
     </main>`,
     'log'
   );
