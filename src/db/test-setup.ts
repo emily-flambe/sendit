@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS attempts (
   route_id TEXT NOT NULL,
   attempted_on TEXT NOT NULL,
   result TEXT NOT NULL CHECK (result IN ('send', 'attempt')),
+  flashed INTEGER NOT NULL DEFAULT 0,
   high_point TEXT NOT NULL DEFAULT '',
   notes TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
