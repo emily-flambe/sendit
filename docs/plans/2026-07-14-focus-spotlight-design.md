@@ -21,8 +21,11 @@ Decisions made with the user (2026-07-14):
 - **The final image has no outlines.** Outlines designate holds during editing;
   they are a separate layer, off by default on the finished image (the viewer has
   an "Outlines" toggle). Preview in the editor matches the final look.
-- Stretch goal (separate PR): tap a hold and let the segmentation model trace its
-  shape (point-prompted single-mask decode from the existing FastSAM session).
+- **Magic tap** (shipped as the follow-up PR): a toggle mode where tapping a hold
+  runs point-prompted segmentation — the whole-image inference is cached per
+  photo, candidate boxes containing the tap are tried smallest-first, and the
+  first mask that actually covers the tap point becomes the polygon. Falls back
+  to a circle (with a toast) when nothing matches.
 
 ## Data model
 

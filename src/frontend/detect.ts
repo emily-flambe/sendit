@@ -273,14 +273,26 @@ function simplifyRing(pts: number[][], epsilon: number): number[][] {
   return a.slice(0, -1).concat(b.slice(0, -1));
 }
 
-export interface DetectResult {
-  markers: RouteMarker[];
-  total: number; // objects detected before color filtering
+interface Inference {
+  dets: Det[]; // post-NMS, in letterboxed input coordinates
+  protoData: Float32Array;
+  protoDim: number;
+  srcData: ImageData;
+  w: number;
+  h: number;
+  scale: number;
+  padX: number;
+  padY: number;
 }
 
-// Detect and outline the route-colored holds. Markers carry a normalized
-// polygon (x/y in [0,1]) plus a centroid + radius for hit-testing.
-export async function detectHolds(img: HTMLImageElement, targetHex: string): Promise<DetectResult> {
+// The whole-image inference is identical for every query against the same
+// photo, so cache the last result: re-running auto-detect or magic-tapping
+// several holds costs one model run total.
+let lastInference: { src: string; result: Inference } | null = null;
+
+async function runInference(img: HTMLImageElement): Promise<Inference> {
+  if (lastInference?.src === img.src) return lastInference.result;
+
   const session = await loadSession();
   const ort = await loadOrt();
 
@@ -326,6 +338,57 @@ export async function detectHolds(img: HTMLImageElement, targetHex: string): Pro
 
   const dets = nms(decodeBoxes(out0.data as Float32Array, nBoxes));
 
+  const result: Inference = { dets, protoData, protoDim, srcData, w, h, scale, padX, padY };
+  lastInference = { src: img.src, result };
+  return result;
+}
+
+// Decode one detection's mask into a normalized polygon (null if degenerate).
+// requireAt: input-coord point that must land inside the binarized mask.
+function detToPolygon(d: Det, inf: Inference, requireAt?: [number, number]): [number, number][] | null {
+  const { protoData, protoDim, scale, padX, padY, w, h } = inf;
+  const protoScale = protoDim / INPUT_SIZE; // 256/1024
+  const mask = buildMask(d.coeffs, protoData, protoDim);
+  const bx1 = Math.max(0, Math.floor(d.x1 * protoScale));
+  const by1 = Math.max(0, Math.floor(d.y1 * protoScale));
+  const bx2 = Math.min(protoDim - 1, Math.ceil(d.x2 * protoScale));
+  const by2 = Math.min(protoDim - 1, Math.ceil(d.y2 * protoScale));
+  const bin = new Uint8Array(protoDim * protoDim);
+  for (let y = by1; y <= by2; y++) {
+    for (let x = bx1; x <= bx2; x++) {
+      if (mask[y * protoDim + x] > 0.5) bin[y * protoDim + x] = 1;
+    }
+  }
+  if (requireAt) {
+    const px = Math.round(requireAt[0] * protoScale);
+    const py = Math.round(requireAt[1] * protoScale);
+    if (px < 0 || py < 0 || px >= protoDim || py >= protoDim || !bin[py * protoDim + px]) return null;
+  }
+  const contour = traceContour(bin, protoDim, protoDim);
+  if (contour.length < 3) return null;
+  const eps = Math.max(1.5, contour.length * 0.01);
+  const simplified = simplifyRing(contour, eps).slice(0, MAX_POLY_POINTS);
+  if (simplified.length < 3) return null;
+
+  // proto → input → source → normalized [0,1]
+  return simplified.map(([px, py]) => {
+    const nx = (px / protoScale - padX) / scale / w;
+    const ny = (py / protoScale - padY) / scale / h;
+    return [Math.min(1, Math.max(0, nx)), Math.min(1, Math.max(0, ny))] as [number, number];
+  });
+}
+
+export interface DetectResult {
+  markers: RouteMarker[];
+  total: number; // objects detected before color filtering
+}
+
+// Detect and outline the route-colored holds. Markers carry a normalized
+// polygon (x/y in [0,1]) plus a centroid + radius for hit-testing.
+export async function detectHolds(img: HTMLImageElement, targetHex: string): Promise<DetectResult> {
+  const inf = await runInference(img);
+  const { dets, srcData, scale, padX, padY } = inf;
+
   const target = hexToHsv(targetHex);
   const toSrcX = (ix: number): number => (ix - padX) / scale;
   const toSrcY = (iy: number): number => (iy - padY) / scale;
@@ -341,36 +404,32 @@ export async function detectHolds(img: HTMLImageElement, targetHex: string): Pro
     return hsv !== null && colorMatches(target, hsv);
   });
 
-  const protoScale = protoDim / INPUT_SIZE; // 256/1024
   const markers: RouteMarker[] = [];
-
   for (const d of matched.slice(0, MAX_HOLDS)) {
-    const mask = buildMask(d.coeffs, protoData, protoDim);
-    const bx1 = Math.max(0, Math.floor(d.x1 * protoScale));
-    const by1 = Math.max(0, Math.floor(d.y1 * protoScale));
-    const bx2 = Math.min(protoDim - 1, Math.ceil(d.x2 * protoScale));
-    const by2 = Math.min(protoDim - 1, Math.ceil(d.y2 * protoScale));
-    const bin = new Uint8Array(protoDim * protoDim);
-    for (let y = by1; y <= by2; y++) {
-      for (let x = bx1; x <= bx2; x++) {
-        if (mask[y * protoDim + x] > 0.5) bin[y * protoDim + x] = 1;
-      }
-    }
-    const contour = traceContour(bin, protoDim, protoDim);
-    if (contour.length < 3) continue;
-    const eps = Math.max(1.5, contour.length * 0.01);
-    const simplified = simplifyRing(contour, eps).slice(0, MAX_POLY_POINTS);
-    if (simplified.length < 3) continue;
-
-    // proto → input → source → normalized [0,1]
-    const poly: [number, number][] = simplified.map(([px, py]) => {
-      const nx = toSrcX(px / protoScale) / w;
-      const ny = toSrcY(py / protoScale) / h;
-      return [Math.min(1, Math.max(0, nx)), Math.min(1, Math.max(0, ny))];
-    });
-
-    markers.push(markerFromPolygon(poly));
+    const poly = detToPolygon(d, inf);
+    if (poly) markers.push(markerFromPolygon(poly));
   }
 
   return { markers, total: dets.length };
+}
+
+// Point-prompted segmentation: trace the shape of the hold under a tap.
+// (nx, ny) are normalized image coordinates. Prefers the smallest detection
+// whose box contains the point AND whose mask covers it — walls and volumes
+// also detect, so "smallest plausible object" is the hold, not the panel.
+export async function segmentHoldAt(img: HTMLImageElement, nx: number, ny: number): Promise<RouteMarker | null> {
+  const inf = await runInference(img);
+  const ix = nx * inf.w * inf.scale + inf.padX;
+  const iy = ny * inf.h * inf.scale + inf.padY;
+
+  const candidates = inf.dets
+    .filter((d) => ix >= d.x1 && ix <= d.x2 && iy >= d.y1 && iy <= d.y2)
+    .sort((a, b) => (a.x2 - a.x1) * (a.y2 - a.y1) - (b.x2 - b.x1) * (b.y2 - b.y1))
+    .slice(0, 5);
+
+  for (const d of candidates) {
+    const poly = detToPolygon(d, inf, [ix, iy]);
+    if (poly) return markerFromPolygon(poly);
+  }
+  return null;
 }
