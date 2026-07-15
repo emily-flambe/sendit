@@ -21,11 +21,14 @@ Decisions made with the user (2026-07-14):
 - **The final image has no outlines.** Outlines designate holds during editing;
   they are a separate layer, off by default on the finished image (the viewer has
   an "Outlines" toggle). Preview in the editor matches the final look.
-- **Magic tap** (shipped as the follow-up PR): a toggle mode where tapping a hold
-  runs point-prompted segmentation — the whole-image inference is cached per
-  photo, candidate boxes containing the tap are tried smallest-first, and the
-  first mask that actually covers the tap point becomes the polygon. Falls back
-  to a circle (with a toast) when nothing matches.
+- **Magic tap** (shipped in #17, removed 2026-07-15): point-prompted segmentation
+  on tap. Removed at the user's request — the 256px mask grid made small holds
+  trace as triangles and the detector missed often enough that the mode felt
+  unreliable. Replaced by an adjustable tap-circle size slider. The
+  implementation (cached whole-image inference, smallest-box-first candidate
+  selection) lives in the git history of `src/frontend/detect.ts` if it's ever
+  revisited; the per-photo inference cache it introduced remains, since it makes
+  re-running auto-detect instant.
 - **Download + thumbnails** (2026-07-15): the spotlit image downloads as a baked
   full-res JPEG (the spotlight SVG is serialized with the photo inlined as a
   data URL and rasterized through a canvas — nothing stored server-side), and

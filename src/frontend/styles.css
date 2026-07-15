@@ -1268,6 +1268,32 @@ input[type='radio'] {
   opacity: 0.4;
 }
 
+/* tap-circle size control */
+
+.annot-size-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.annot-size-row.hidden {
+  display: none;
+}
+
+.annot-size-dot {
+  border-radius: 50%;
+  border: 2px solid;
+  flex-shrink: 0;
+  transition: width 0.1s ease, height 0.1s ease;
+}
+
+.annot-size-row input[type='range'] {
+  width: min(220px, 60vw);
+  accent-color: var(--chalk, #e8e4da);
+}
+
 .annot-hint {
   margin: 0;
 }

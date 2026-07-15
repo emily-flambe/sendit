@@ -16,7 +16,7 @@ import {
   type RouteWithGym,
   type Route,
 } from './api';
-import { detectHolds, segmentHoldAt } from './detect';
+import { detectHolds } from './detect';
 import { markerFromPolygon } from '../markers';
 
 const GYM_KEY = 'sendit_gym';
@@ -738,9 +738,6 @@ function openRouteImageEditor(
   const detectBtn = document.createElement('button');
   detectBtn.className = 'btn ghost detect-btn';
   detectBtn.textContent = '✨ Auto-detect';
-  const magicBtn = document.createElement('button');
-  magicBtn.className = 'btn ghost detect-btn';
-  magicBtn.textContent = '◉ Magic tap';
   const traceBtn = document.createElement('button');
   traceBtn.className = 'btn ghost detect-btn';
   traceBtn.textContent = '⬠ Draw shape';
@@ -749,10 +746,37 @@ function openRouteImageEditor(
   previewBtn.textContent = '◐ Preview';
   const btnRow = document.createElement('div');
   btnRow.className = 'annot-btn-row';
-  btnRow.append(detectBtn, magicBtn, traceBtn, previewBtn);
+  btnRow.append(detectBtn, traceBtn, previewBtn);
+
+  // Tap size: radius (normalized to image width) applied to new circle marks.
+  let tapR = DEFAULT_MARKER_R;
+  const sizeRow = document.createElement('div');
+  sizeRow.className = 'annot-size-row';
+  const sizeDot = document.createElement('span');
+  sizeDot.className = 'annot-size-dot';
+  const sizeInput = document.createElement('input');
+  sizeInput.type = 'range';
+  sizeInput.min = '0.008';
+  sizeInput.max = '0.06';
+  sizeInput.step = '0.002';
+  sizeInput.value = String(tapR);
+  sizeInput.setAttribute('aria-label', 'Tap circle size');
+  const syncSizeDot = () => {
+    const px = Math.round(8 + ((tapR - 0.008) / (0.06 - 0.008)) * 20);
+    sizeDot.style.width = `${px}px`;
+    sizeDot.style.height = `${px}px`;
+    sizeDot.style.borderColor = colorHex(color);
+  };
+  sizeInput.addEventListener('input', () => {
+    tapR = Number(sizeInput.value);
+    syncSizeDot();
+  });
+  syncSizeDot();
+  sizeRow.append(sizeDot, sizeInput);
+
   const hint = document.createElement('p');
   hint.className = 'annot-hint';
-  foot.append(btnRow, hint);
+  foot.append(btnRow, sizeRow, hint);
 
   const { wrap } = annotatedImage(photoId, photoV, () => markers, color);
   body.appendChild(wrap);
@@ -765,8 +789,6 @@ function openRouteImageEditor(
   let drawMode = false;
   let trace: [number, number][] = [];
   let preview = false;
-  let magic = false;
-  let magicBusy = false;
 
   function syncHint(): void {
     if (drawMode) {
@@ -776,8 +798,6 @@ function openRouteImageEditor(
           : trace.length < 3
             ? 'Keep tapping around the hold’s edge.'
             : 'Tap the first point (or Done) to close the shape.';
-    } else if (magic) {
-      hint.textContent = 'Tap a hold and the detector traces its shape.';
     } else if (preview) {
       hint.textContent = 'This is how the route image will look. Taps still edit.';
     } else {
@@ -820,10 +840,9 @@ function openRouteImageEditor(
     }
     traceBtn.textContent = !drawMode ? '⬠ Draw shape' : trace.length > 0 ? '↩ Undo point' : '⬠ Drawing ✓';
     previewBtn.textContent = preview ? '◐ Preview ✓' : '◐ Preview';
-    magicBtn.textContent = magic ? '◉ Magic tap ✓' : '◉ Magic tap';
     previewBtn.disabled = drawMode;
     detectBtn.disabled = drawMode;
-    magicBtn.disabled = drawMode;
+    sizeRow.classList.toggle('hidden', drawMode || preview);
     cancelBtn.textContent = !drawMode ? 'Cancel' : trace.length > 0 ? 'Cancel shape' : 'Stop drawing';
     syncHint();
     if (img.naturalWidth) {
@@ -887,39 +906,9 @@ function openRouteImageEditor(
       }
     }
     if (markers.length >= MAX_MARKERS) return;
-    const px = Math.min(1, Math.max(0, nx));
-    const py = Math.min(1, Math.max(0, ny));
-    if (magic) {
-      void magicTap(px, py);
-      return;
-    }
-    markers.push({ x: px, y: py, r: DEFAULT_MARKER_R });
+    markers.push({ x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)), r: tapR });
     sync();
   });
-
-  async function magicTap(nx: number, ny: number): Promise<void> {
-    if (magicBusy) return;
-    magicBusy = true;
-    // Instant when the image's inference is cached; the delay avoids a
-    // spinner flash in that case.
-    const hideSpinner = showSpinner('Tracing the hold…', 300);
-    try {
-      await ensureImageLoaded();
-      const found = await segmentHoldAt(img, nx, ny);
-      if (found) {
-        markers.push(found);
-      } else {
-        markers.push({ x: nx, y: ny, r: DEFAULT_MARKER_R });
-        toast('No shape found there — added a circle instead.');
-      }
-      sync();
-    } catch {
-      toast('Tracing failed — tap again for a circle, or draw the shape.');
-    } finally {
-      hideSpinner();
-      magicBusy = false;
-    }
-  }
 
   traceBtn.addEventListener('click', () => {
     if (!drawMode) {
@@ -998,11 +987,6 @@ function openRouteImageEditor(
       hideSpinner();
       detectBtn.disabled = false;
     }
-  });
-
-  magicBtn.addEventListener('click', () => {
-    magic = !magic;
-    sync();
   });
 
   cancelBtn.addEventListener('click', () => {
