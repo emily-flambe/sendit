@@ -16,7 +16,7 @@ import {
   type RouteWithGym,
   type Route,
 } from './api';
-import { detectHolds } from './detect';
+import { detectHolds, segmentHoldAt } from './detect';
 import { markerFromPolygon } from '../markers';
 
 const GYM_KEY = 'sendit_gym';
@@ -594,6 +594,9 @@ function openRouteImageEditor(
   const detectBtn = document.createElement('button');
   detectBtn.className = 'btn ghost detect-btn';
   detectBtn.textContent = '✨ Auto-detect';
+  const magicBtn = document.createElement('button');
+  magicBtn.className = 'btn ghost detect-btn';
+  magicBtn.textContent = '◉ Magic tap';
   const traceBtn = document.createElement('button');
   traceBtn.className = 'btn ghost detect-btn';
   traceBtn.textContent = '⬠ Draw shape';
@@ -602,7 +605,7 @@ function openRouteImageEditor(
   previewBtn.textContent = '◐ Preview';
   const btnRow = document.createElement('div');
   btnRow.className = 'annot-btn-row';
-  btnRow.append(detectBtn, traceBtn, previewBtn);
+  btnRow.append(detectBtn, magicBtn, traceBtn, previewBtn);
   const hint = document.createElement('p');
   hint.className = 'annot-hint';
   foot.append(btnRow, hint);
@@ -617,6 +620,8 @@ function openRouteImageEditor(
   // of adding/removing markers.
   let trace: [number, number][] | null = null;
   let preview = false;
+  let magic = false;
+  let magicBusy = false;
 
   function syncHint(): void {
     if (trace) {
@@ -624,6 +629,8 @@ function openRouteImageEditor(
         trace.length < 3
           ? 'Tap around the hold’s edge to outline it.'
           : 'Keep tapping, or tap the first point (or Done) to close the shape.';
+    } else if (magic) {
+      hint.textContent = 'Tap a hold and the detector traces its shape.';
     } else if (preview) {
       hint.textContent = 'This is how the route image will look. Taps still edit.';
     } else {
@@ -666,8 +673,10 @@ function openRouteImageEditor(
     }
     traceBtn.textContent = trace ? '↩ Undo point' : '⬠ Draw shape';
     previewBtn.textContent = preview ? '◐ Preview ✓' : '◐ Preview';
+    magicBtn.textContent = magic ? '◉ Magic tap ✓' : '◉ Magic tap';
     previewBtn.disabled = trace !== null;
     detectBtn.disabled = trace !== null;
+    magicBtn.disabled = trace !== null;
     cancelBtn.textContent = trace ? 'Cancel shape' : 'Cancel';
     syncHint();
     if (img.naturalWidth) {
@@ -727,9 +736,40 @@ function openRouteImageEditor(
         return;
       }
     }
-    markers.push({ x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)), r: DEFAULT_MARKER_R });
+    if (markers.length >= MAX_MARKERS) return;
+    const px = Math.min(1, Math.max(0, nx));
+    const py = Math.min(1, Math.max(0, ny));
+    if (magic) {
+      void magicTap(px, py);
+      return;
+    }
+    markers.push({ x: px, y: py, r: DEFAULT_MARKER_R });
     sync();
   });
+
+  async function magicTap(nx: number, ny: number): Promise<void> {
+    if (magicBusy) return;
+    magicBusy = true;
+    // Instant when the image's inference is cached; the delay avoids a
+    // spinner flash in that case.
+    const hideSpinner = showSpinner('Tracing the hold…', 300);
+    try {
+      await ensureImageLoaded();
+      const found = await segmentHoldAt(img, nx, ny);
+      if (found) {
+        markers.push(found);
+      } else {
+        markers.push({ x: nx, y: ny, r: DEFAULT_MARKER_R });
+        toast('No shape found there — added a circle instead.');
+      }
+      sync();
+    } catch {
+      toast('Tracing failed — tap again for a circle, or draw the shape.');
+    } finally {
+      hideSpinner();
+      magicBusy = false;
+    }
+  }
 
   traceBtn.addEventListener('click', () => {
     if (trace) {
@@ -754,23 +794,31 @@ function openRouteImageEditor(
     });
   }
 
-  const colorWord = color.trim().toLowerCase();
-  detectBtn.addEventListener('click', async () => {
-    detectBtn.disabled = true;
-
-    // Full-cover spinner: inference runs in a worker so this keeps animating,
-    // and it makes the multi-second wait legible instead of feeling dead.
+  // Full-cover spinner: inference runs in a worker so this keeps animating,
+  // and it makes the multi-second wait legible instead of feeling dead.
+  // delayMs skips the flash entirely when the work finishes fast (warm cache).
+  function showSpinner(msgText: string, delayMs = 0): () => void {
     const spinner = document.createElement('div');
     spinner.className = 'detect-spinner';
     const dot = document.createElement('div');
     dot.className = 'detect-dot';
     const msg = document.createElement('p');
-    msg.textContent = `Finding ${colorWord || ''} holds…`;
+    msg.textContent = msgText;
     const sub = document.createElement('p');
     sub.className = 'detect-sub';
     sub.textContent = 'First run downloads the detector (~20MB), then it is instant.';
     spinner.append(dot, msg, sub);
-    overlay.appendChild(spinner);
+    const timer = setTimeout(() => overlay.appendChild(spinner), delayMs);
+    return () => {
+      clearTimeout(timer);
+      spinner.remove();
+    };
+  }
+
+  const colorWord = color.trim().toLowerCase();
+  detectBtn.addEventListener('click', async () => {
+    detectBtn.disabled = true;
+    const hideSpinner = showSpinner(`Finding ${colorWord || ''} holds…`);
 
     try {
       await ensureImageLoaded();
@@ -795,9 +843,14 @@ function openRouteImageEditor(
     } catch {
       toast('Detection failed — mark holds by tapping instead.');
     } finally {
-      spinner.remove();
+      hideSpinner();
       detectBtn.disabled = false;
     }
+  });
+
+  magicBtn.addEventListener('click', () => {
+    magic = !magic;
+    sync();
   });
 
   cancelBtn.addEventListener('click', () => {
