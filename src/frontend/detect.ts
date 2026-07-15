@@ -344,8 +344,7 @@ async function runInference(img: HTMLImageElement): Promise<Inference> {
 }
 
 // Decode one detection's mask into a normalized polygon (null if degenerate).
-// requireAt: input-coord point that must land inside the binarized mask.
-function detToPolygon(d: Det, inf: Inference, requireAt?: [number, number]): [number, number][] | null {
+function detToPolygon(d: Det, inf: Inference): [number, number][] | null {
   const { protoData, protoDim, scale, padX, padY, w, h } = inf;
   const protoScale = protoDim / INPUT_SIZE; // 256/1024
   const mask = buildMask(d.coeffs, protoData, protoDim);
@@ -358,11 +357,6 @@ function detToPolygon(d: Det, inf: Inference, requireAt?: [number, number]): [nu
     for (let x = bx1; x <= bx2; x++) {
       if (mask[y * protoDim + x] > 0.5) bin[y * protoDim + x] = 1;
     }
-  }
-  if (requireAt) {
-    const px = Math.round(requireAt[0] * protoScale);
-    const py = Math.round(requireAt[1] * protoScale);
-    if (px < 0 || py < 0 || px >= protoDim || py >= protoDim || !bin[py * protoDim + px]) return null;
   }
   const contour = traceContour(bin, protoDim, protoDim);
   if (contour.length < 3) return null;
@@ -413,23 +407,3 @@ export async function detectHolds(img: HTMLImageElement, targetHex: string): Pro
   return { markers, total: dets.length };
 }
 
-// Point-prompted segmentation: trace the shape of the hold under a tap.
-// (nx, ny) are normalized image coordinates. Prefers the smallest detection
-// whose box contains the point AND whose mask covers it — walls and volumes
-// also detect, so "smallest plausible object" is the hold, not the panel.
-export async function segmentHoldAt(img: HTMLImageElement, nx: number, ny: number): Promise<RouteMarker | null> {
-  const inf = await runInference(img);
-  const ix = nx * inf.w * inf.scale + inf.padX;
-  const iy = ny * inf.h * inf.scale + inf.padY;
-
-  const candidates = inf.dets
-    .filter((d) => ix >= d.x1 && ix <= d.x2 && iy >= d.y1 && iy <= d.y2)
-    .sort((a, b) => (a.x2 - a.x1) * (a.y2 - a.y1) - (b.x2 - b.x1) * (b.y2 - b.y1))
-    .slice(0, 5);
-
-  for (const d of candidates) {
-    const poly = detToPolygon(d, inf, [ix, iy]);
-    if (poly) return markerFromPolygon(poly);
-  }
-  return null;
-}
