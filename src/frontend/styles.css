@@ -809,6 +809,17 @@ input[type='radio'] {
   opacity: 1;
 }
 
+.card-thumb svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.annot-head-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .photo-strip {
   display: flex;
   gap: 10px;

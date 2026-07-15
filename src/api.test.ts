@@ -302,6 +302,21 @@ describe('photos and gallery', () => {
     expect(row.first_photo_id).toBe(first.data.photo.id);
   });
 
+  it('surfaces the route image in route lists for spotlit thumbnails', async () => {
+    const routeId = await createRoute();
+    const photo = await upload(`/api/routes/${routeId}/photos`, token);
+    const markers = [{ x: 0.4, y: 0.5, r: 0.02, polygon: [[0.39, 0.49], [0.41, 0.49], [0.4, 0.52]] }];
+    await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photo.data.photo.id, markers }, token);
+
+    for (const path of [`/api/gyms/${gymId}/routes`, '/api/routes']) {
+      const list = await call('GET', path, undefined, token);
+      const row = list.data.routes.find((r: Json) => r.id === routeId);
+      expect(row.image_photo_id).toBe(photo.data.photo.id);
+      expect(JSON.parse(row.image_markers)).toEqual(markers);
+      expect(row.image_photo_v).toBeGreaterThan(0);
+    }
+  });
+
   it('uploads straight to the gallery, with and without a gym tag', async () => {
     const tagged = await upload(`/api/photos?gym=${gymId}`, token);
     expect(tagged.status).toBe(201);
