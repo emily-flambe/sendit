@@ -99,7 +99,10 @@ export async function listRoutes(
               COALESCE(SUM(a.result = 'send'), 0) AS send_count,
               MAX(a.attempted_on) AS last_attempted_on,
               (SELECT COUNT(*) FROM route_photo_links l WHERE l.route_id = r.id) AS photo_count,
-              (SELECT l.photo_id FROM route_photo_links l WHERE l.route_id = r.id ORDER BY l.created_at LIMIT 1) AS first_photo_id
+              (SELECT l.photo_id FROM route_photo_links l WHERE l.route_id = r.id ORDER BY l.created_at LIMIT 1) AS first_photo_id,
+              (SELECT ri.photo_id FROM route_images ri WHERE ri.route_id = r.id) AS image_photo_id,
+              (SELECT ri.markers FROM route_images ri WHERE ri.route_id = r.id) AS image_markers,
+              (SELECT p.updated_at FROM route_images ri JOIN photos p ON p.id = ri.photo_id WHERE ri.route_id = r.id) AS image_photo_v
        FROM routes r
        JOIN gyms g ON g.id = r.gym_id
        LEFT JOIN attempts a ON a.route_id = r.id
@@ -508,7 +511,10 @@ export async function listAllRoutes(
               COALESCE(SUM(a.result = 'send'), 0) AS send_count,
               MAX(a.attempted_on) AS last_attempted_on,
               (SELECT COUNT(*) FROM route_photo_links l WHERE l.route_id = r.id) AS photo_count,
-              (SELECT l.photo_id FROM route_photo_links l WHERE l.route_id = r.id ORDER BY l.created_at LIMIT 1) AS first_photo_id
+              (SELECT l.photo_id FROM route_photo_links l WHERE l.route_id = r.id ORDER BY l.created_at LIMIT 1) AS first_photo_id,
+              (SELECT ri.photo_id FROM route_images ri WHERE ri.route_id = r.id) AS image_photo_id,
+              (SELECT ri.markers FROM route_images ri WHERE ri.route_id = r.id) AS image_markers,
+              (SELECT p.updated_at FROM route_images ri JOIN photos p ON p.id = ri.photo_id WHERE ri.route_id = r.id) AS image_photo_v
        FROM routes r
        JOIN gyms g ON g.id = r.gym_id
        LEFT JOIN attempts a ON a.route_id = r.id

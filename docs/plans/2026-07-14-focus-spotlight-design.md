@@ -26,6 +26,13 @@ Decisions made with the user (2026-07-14):
   photo, candidate boxes containing the tap are tried smallest-first, and the
   first mask that actually covers the tap point becomes the polygon. Falls back
   to a circle (with a toast) when nothing matches.
+- **Download + thumbnails** (2026-07-15): the spotlit image downloads as a baked
+  full-res JPEG (the spotlight SVG is serialized with the photo inlined as a
+  data URL and rasterized through a canvas — nothing stored server-side), and
+  routes with a route image show a spotlit thumbnail on the routes list,
+  viewBox-cropped to the route's marker bounding box. Draw-shape mode is sticky
+  (closing a shape starts the next), and zoomed images pan by drag or plain
+  scroll (pinch / ctrl+scroll zooms).
 
 ## Data model
 

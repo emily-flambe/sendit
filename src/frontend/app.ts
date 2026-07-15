@@ -330,6 +330,123 @@ function drawSpotlight(svg: SVGSVGElement, markers: RouteMarker[], w: number, h:
   svg.append(defs, image);
 }
 
+// Self-contained spotlit picture: sharp photo underneath, dimmed masked copy
+// on top — no HTML <img> required. Used for route-card thumbnails (viewBox
+// cropped to the route) and for baking the downloadable image.
+function buildSpotlightSvg(
+  markers: RouteMarker[],
+  w: number,
+  h: number,
+  href: string,
+  viewBox?: { x: number; y: number; w: number; h: number }
+): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
+  const vb = viewBox ?? { x: 0, y: 0, w, h };
+  svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+  const base = svgEl('image', { href, width: String(w), height: String(h), preserveAspectRatio: 'none' });
+  svg.appendChild(base);
+  drawSpotlight(svg, markers, w, h, href);
+  return svg;
+}
+
+// viewBox square around the route's markers so a thumbnail zooms into the
+// route instead of showing the whole wall.
+function routeViewBox(markers: RouteMarker[], w: number, h: number): { x: number; y: number; w: number; h: number } {
+  let minX = 1;
+  let minY = 1;
+  let maxX = 0;
+  let maxY = 0;
+  for (const m of markers) {
+    minX = Math.min(minX, m.x - m.r);
+    maxX = Math.max(maxX, m.x + m.r);
+    minY = Math.min(minY, m.y - m.r);
+    maxY = Math.max(maxY, m.y + m.r);
+  }
+  if (maxX <= minX || maxY <= minY) return { x: 0, y: 0, w, h };
+  const pad = 1.25;
+  const side = Math.min(Math.max((maxX - minX) * w, (maxY - minY) * h) * pad, Math.min(w, h));
+  const cx = Math.min(Math.max(((minX + maxX) / 2) * w, side / 2), w - side / 2);
+  const cy = Math.min(Math.max(((minY + maxY) / 2) * h, side / 2), h - side / 2);
+  return { x: cx - side / 2, y: cy - side / 2, w: side, h: side };
+}
+
+// Spotlit square thumbnail for a route card; fills in when the photo loads.
+function spotlightThumb(photoId: string, photoV: number, markers: RouteMarker[]): HTMLSpanElement {
+  const span = document.createElement('span');
+  span.className = 'card-thumb';
+  void photoUrl(photoId, photoV)
+    .then(
+      (url) =>
+        new Promise<{ url: string; w: number; h: number }>((resolve, reject) => {
+          const probe = new Image();
+          probe.onload = () => resolve({ url, w: probe.naturalWidth, h: probe.naturalHeight });
+          probe.onerror = () => reject(new Error('photo load failed'));
+          probe.src = url;
+        })
+    )
+    .then(({ url, w, h }) => {
+      const svg = buildSpotlightSvg(markers, w, h, url, routeViewBox(markers, w, h));
+      svg.setAttribute('preserveAspectRatio', 'xMidYMid slice');
+      span.appendChild(svg);
+    })
+    .catch(() => span.remove());
+  return span;
+}
+
+const XLINK_NS = 'http://www.w3.org/1999/xlink';
+
+// Bake the spotlit image to a JPEG and hand it to the browser as a download.
+// The photo is inlined as a data URL because blob: hrefs don't resolve inside
+// an SVG rasterized via <img>.
+async function downloadRouteImage(image: RouteImage, photoV: number, filename: string): Promise<void> {
+  const url = await photoUrl(image.photo_id, photoV);
+  const blob = await (await fetch(url)).blob();
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error('read failed'));
+    reader.readAsDataURL(blob);
+  });
+  const probe = new Image();
+  await new Promise<void>((resolve, reject) => {
+    probe.onload = () => resolve();
+    probe.onerror = () => reject(new Error('photo load failed'));
+    probe.src = url;
+  });
+  const w = probe.naturalWidth;
+  const h = probe.naturalHeight;
+
+  const svg = buildSpotlightSvg(image.markers, w, h, dataUrl);
+  svg.setAttribute('xmlns', SVG_NS);
+  svg.setAttribute('xmlns:xlink', XLINK_NS);
+  svg.setAttribute('width', String(w));
+  svg.setAttribute('height', String(h));
+  svg.querySelectorAll('image').forEach((el) => el.setAttributeNS(XLINK_NS, 'xlink:href', dataUrl));
+
+  const svgUrl = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml' }));
+  try {
+    const render = new Image();
+    await new Promise<void>((resolve, reject) => {
+      render.onload = () => resolve();
+      render.onerror = () => reject(new Error('svg render failed'));
+      render.src = svgUrl;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext('2d')!.drawImage(render, 0, 0, w, h);
+    const out = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+    if (!out) throw new Error('encode failed');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(out);
+    a.download = `${filename}.jpg`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  } finally {
+    URL.revokeObjectURL(svgUrl);
+  }
+}
+
 type MarkerMode = 'edit' | 'focus';
 
 // Callers clear the svg first; this only appends, so the spotlight layer and
@@ -451,6 +568,8 @@ function wireZoomAndTap(body: HTMLElement, wrap: HTMLElement, onTap: ((x: number
 
   wrap.style.transformOrigin = '0 0';
   body.style.touchAction = 'none';
+  // Native image drag-and-drop cancels the pointer stream mid-pan.
+  body.addEventListener('dragstart', (e) => e.preventDefault());
 
   function apply(): void {
     if (scale <= 1.01) {
@@ -479,7 +598,15 @@ function wireZoomAndTap(body: HTMLElement, wrap: HTMLElement, onTap: ((x: number
     'wheel',
     (e) => {
       e.preventDefault();
-      zoomAt(e.clientX, e.clientY, scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+      // Trackpad pinch arrives as ctrlKey+wheel. Once zoomed, plain scroll
+      // pans (two-finger trackpad panning); pinch or ctrl/cmd+scroll zooms.
+      if (e.ctrlKey || e.metaKey || scale === 1) {
+        zoomAt(e.clientX, e.clientY, scale * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+      } else {
+        tx -= e.deltaX;
+        ty -= e.deltaY;
+        apply();
+      }
     },
     { passive: false }
   );
@@ -546,7 +673,7 @@ function annotOverlay(title: string): { overlay: HTMLDivElement; head: HTMLDivEl
   return { overlay, head, body, foot };
 }
 
-function openRouteImageViewer(image: RouteImage, photoV: number, color: string): void {
+function openRouteImageViewer(image: RouteImage, photoV: number, color: string, downloadName = 'route'): void {
   const { overlay, head, body } = annotOverlay('Route image');
   const closeBtn = document.createElement('button');
   closeBtn.className = 'btn ghost';
@@ -554,10 +681,27 @@ function openRouteImageViewer(image: RouteImage, photoV: number, color: string):
   closeBtn.addEventListener('click', () => overlay.remove());
   head.prepend(closeBtn);
   let showOutlines = false;
+  const actions = document.createElement('span');
+  actions.className = 'annot-head-actions';
   const outlineBtn = document.createElement('button');
   outlineBtn.className = 'btn ghost';
   outlineBtn.textContent = 'Outlines';
-  head.appendChild(outlineBtn);
+  const dlBtn = document.createElement('button');
+  dlBtn.className = 'btn ghost';
+  dlBtn.textContent = '⬇';
+  dlBtn.setAttribute('aria-label', 'Download image');
+  actions.append(outlineBtn, dlBtn);
+  head.appendChild(actions);
+  dlBtn.addEventListener('click', async () => {
+    dlBtn.disabled = true;
+    try {
+      await downloadRouteImage(image, photoV, downloadName);
+    } catch {
+      toast('Could not build the download.');
+    } finally {
+      dlBtn.disabled = false;
+    }
+  });
   const { wrap, rerender } = annotatedImage(image.photo_id, photoV, () => image.markers, color, {
     focus: true,
     outlines: () => showOutlines,
@@ -616,30 +760,33 @@ function openRouteImageEditor(
   const img = wrap.querySelector('img')!;
   const svg = wrap.querySelector('svg')!;
 
-  // Tap-to-trace state: while non-null, taps append outline vertices instead
-  // of adding/removing markers.
-  let trace: [number, number][] | null = null;
+  // Tap-to-trace state: while drawMode is on, taps append outline vertices
+  // instead of adding/removing markers; closing a shape stays in the mode.
+  let drawMode = false;
+  let trace: [number, number][] = [];
   let preview = false;
   let magic = false;
   let magicBusy = false;
 
   function syncHint(): void {
-    if (trace) {
+    if (drawMode) {
       hint.textContent =
-        trace.length < 3
-          ? 'Tap around the hold’s edge to outline it.'
-          : 'Keep tapping, or tap the first point (or Done) to close the shape.';
+        trace.length === 0
+          ? 'Tap around a hold’s edge to outline it. Close a shape, then start the next.'
+          : trace.length < 3
+            ? 'Keep tapping around the hold’s edge.'
+            : 'Tap the first point (or Done) to close the shape.';
     } else if (magic) {
       hint.textContent = 'Tap a hold and the detector traces its shape.';
     } else if (preview) {
       hint.textContent = 'This is how the route image will look. Taps still edit.';
     } else {
-      hint.textContent = 'Tap a hold to mark it, tap a mark to remove it. Pinch or scroll to zoom.';
+      hint.textContent = 'Tap a hold to mark it, tap a mark to remove it. Pinch or scroll to zoom, drag or scroll to pan.';
     }
   }
 
   function drawTrace(w: number, h: number): void {
-    if (!trace || trace.length === 0) return;
+    if (trace.length === 0) return;
     const pts = trace.map(([px, py]) => `${px * w},${py * h}`).join(' ');
     if (trace.length > 1) {
       svg.appendChild(svgEl('polyline', {
@@ -664,20 +811,20 @@ function openRouteImageEditor(
   }
 
   function sync(): void {
-    if (trace) {
+    if (drawMode && trace.length > 0) {
       saveBtn.textContent = trace.length >= 3 ? 'Done' : 'Save';
       saveBtn.disabled = trace.length < 3;
     } else {
       saveBtn.textContent = `Save (${markers.length})`;
       saveBtn.disabled = markers.length === 0;
     }
-    traceBtn.textContent = trace ? '↩ Undo point' : '⬠ Draw shape';
+    traceBtn.textContent = !drawMode ? '⬠ Draw shape' : trace.length > 0 ? '↩ Undo point' : '⬠ Drawing ✓';
     previewBtn.textContent = preview ? '◐ Preview ✓' : '◐ Preview';
     magicBtn.textContent = magic ? '◉ Magic tap ✓' : '◉ Magic tap';
-    previewBtn.disabled = trace !== null;
-    detectBtn.disabled = trace !== null;
-    magicBtn.disabled = trace !== null;
-    cancelBtn.textContent = trace ? 'Cancel shape' : 'Cancel';
+    previewBtn.disabled = drawMode;
+    detectBtn.disabled = drawMode;
+    magicBtn.disabled = drawMode;
+    cancelBtn.textContent = !drawMode ? 'Cancel' : trace.length > 0 ? 'Cancel shape' : 'Stop drawing';
     syncHint();
     if (img.naturalWidth) {
       const w = img.naturalWidth;
@@ -695,9 +842,12 @@ function openRouteImageEditor(
   sync();
   img.addEventListener('load', sync);
 
+  // Closing a shape stays in draw mode so several holds can be outlined in a row.
   function closeTrace(): void {
-    if (trace && trace.length >= 3) markers.push(markerFromPolygon(trace.slice(0, MAX_POLY_POINTS)));
-    trace = null;
+    if (trace.length >= 3 && markers.length < MAX_MARKERS) {
+      markers.push(markerFromPolygon(trace.slice(0, MAX_POLY_POINTS)));
+    }
+    trace = [];
     sync();
   }
 
@@ -709,7 +859,7 @@ function openRouteImageEditor(
     const nx = (cx - rect.left) / rect.width;
     const ny = (cy - rect.top) / rect.height;
 
-    if (trace) {
+    if (drawMode) {
       // Tapping the first vertex closes the shape.
       if (trace.length >= 3) {
         const [fx, fy] = trace[0];
@@ -772,11 +922,13 @@ function openRouteImageEditor(
   }
 
   traceBtn.addEventListener('click', () => {
-    if (trace) {
+    if (!drawMode) {
+      drawMode = true;
+      preview = false;
+    } else if (trace.length > 0) {
       trace.pop(); // undo last point
     } else {
-      trace = [];
-      preview = false;
+      drawMode = false;
     }
     sync();
   });
@@ -854,15 +1006,16 @@ function openRouteImageEditor(
   });
 
   cancelBtn.addEventListener('click', () => {
-    if (trace) {
-      trace = null;
+    if (drawMode) {
+      if (trace.length > 0) trace = [];
+      else drawMode = false;
       sync();
       return;
     }
     overlay.remove();
   });
   saveBtn.addEventListener('click', async () => {
-    if (trace) {
+    if (drawMode && trace.length > 0) {
       closeTrace();
       return;
     }
@@ -1737,9 +1890,13 @@ async function renderRoutes(): Promise<void> {
       const last = r.last_attempted_on
         ? `${r.attempt_count} ${r.attempt_count === 1 ? 'try' : 'tries'} · last ${recency(r.last_attempted_on)}`
         : 'not tried yet';
-      const thumb = r.first_photo_id
-        ? `<span class="card-thumb"><img data-photo="${esc(r.first_photo_id)}" alt="" /></span>`
-        : '';
+      // Routes with a route image get a spotlit thumbnail (swapped in below);
+      // others fall back to their first photo.
+      const thumb = r.image_photo_id
+        ? `<span class="card-thumb" data-spotlight-thumb="${esc(r.id)}"></span>`
+        : r.first_photo_id
+          ? `<span class="card-thumb"><img data-photo="${esc(r.first_photo_id)}" alt="" /></span>`
+          : '';
       return `<a class="route-card" href="#/route/${esc(r.id)}">
         <span class="tape" style="background:${colorHex(r.color)}"></span>
         <span class="route-card-body">
@@ -1790,6 +1947,16 @@ async function renderRoutes(): Promise<void> {
   );
 
   hydratePhotos();
+  document.querySelectorAll<HTMLSpanElement>('[data-spotlight-thumb]').forEach((el) => {
+    const r = visible.find((v) => v.id === el.dataset.spotlightThumb);
+    if (!r?.image_photo_id || !r.image_markers) return;
+    try {
+      const markers = JSON.parse(r.image_markers) as RouteMarker[];
+      el.replaceWith(spotlightThumb(r.image_photo_id, r.image_photo_v ?? 0, markers));
+    } catch {
+      el.remove();
+    }
+  });
   wireFilterBar(f, () => void renderRoutes());
 }
 
@@ -2059,7 +2226,9 @@ async function renderRouteDetail(routeId: string): Promise<void> {
     const image = routeImage;
     const view = document.getElementById('ri-view')!;
     const { wrap } = annotatedImage(image.photo_id, photoVersion(image.photo_id), () => image.markers, route.color, { focus: true });
-    wrap.addEventListener('click', () => openRouteImageViewer(image, photoVersion(image.photo_id), route.color));
+    wrap.addEventListener('click', () =>
+      openRouteImageViewer(image, photoVersion(image.photo_id), route.color, routeTitle(route).replace(/\s+/g, '-').toLowerCase())
+    );
     view.appendChild(wrap);
     document.getElementById('ri-edit')!.addEventListener('click', () => editImage(image.photo_id, image.markers));
     document.getElementById('ri-remove')!.addEventListener('click', async () => {

@@ -37,6 +37,9 @@ export interface RouteWithStats extends Route {
   last_attempted_on: string | null;
   photo_count: number;
   first_photo_id: string | null;
+  image_photo_id: string | null;
+  image_markers: string | null; // markers JSON of the route image, for spotlit thumbnails
+  image_photo_v: number | null;
 }
 
 export interface RouteWithGym extends RouteWithStats {
