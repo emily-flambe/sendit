@@ -1197,6 +1197,11 @@ input[type='radio'] {
   gap: 8px;
 }
 
+/* With an odd number of selects, stretch the last across the row. */
+.filter-bar select:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
 .filter-bar select {
   width: 100%;
   background: var(--panel);
