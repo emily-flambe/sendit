@@ -1464,17 +1464,19 @@ interface ListFilters {
   discipline: string;
   status: string;
   sort: string;
+  grade: string;
 }
 
-const logFilters: ListFilters = { gym: 'all', discipline: 'all', status: 'all', sort: 'newest' };
-const routeFilters: ListFilters = { gym: 'all', discipline: 'all', status: 'active', sort: 'recent' };
+const logFilters: ListFilters = { gym: 'all', discipline: 'all', status: 'all', sort: 'newest', grade: 'all' };
+const routeFilters: ListFilters = { gym: 'all', discipline: 'all', status: 'active', sort: 'recent', grade: 'all' };
 
 type Options = [string, string][];
 
-function filterBar(f: ListFilters, statusOptions: Options, sortOptions: Options): string {
+function filterBar(f: ListFilters, statusOptions: Options, sortOptions: Options, gradeOptions?: Options): string {
   const selects: [keyof ListFilters, Options][] = [
     ['gym', [['all', 'All gyms'], ...gyms.map((g): [string, string] => [g.id, g.name])]],
     ['discipline', [['all', 'All types'], ...(Object.entries(DISCIPLINE_LABELS) as Options)]],
+    ...(gradeOptions ? ([['grade', gradeOptions]] as [keyof ListFilters, Options][]) : []),
     ['status', statusOptions],
     ['sort', sortOptions],
   ];
@@ -1851,9 +1853,20 @@ async function renderRoutes(): Promise<void> {
   }
 
   const f = routeFilters;
+
+  // Grades are freetext, so offer only the grades actually in use,
+  // easiest first. Built from all routes so the option list stays
+  // stable while other filters change.
+  const gradesInUse = [...new Set(routes.map((r) => r.grade.trim()).filter(Boolean))].sort(
+    (a, b) => gradeRank(a) - gradeRank(b)
+  );
+  if (f.grade !== 'all' && !gradesInUse.includes(f.grade)) f.grade = 'all';
+  const gradeOptions: Options = [['all', 'All grades'], ...gradesInUse.map((g): [string, string] => [g, g])];
+
   const visible = routes.filter((r) => {
     if (f.gym !== 'all' && r.gym_id !== f.gym) return false;
     if (f.discipline !== 'all' && r.discipline !== f.discipline) return false;
+    if (f.grade !== 'all' && r.grade.trim() !== f.grade) return false;
     if (f.status === 'archived') return r.archived === 1;
     if (r.archived === 1) return false;
     if (f.status === 'active') return true;
@@ -1922,7 +1935,8 @@ async function renderRoutes(): Promise<void> {
           ['recent', 'Recent activity'],
           ['grade', 'By grade'],
           ['newest', 'Newest first'],
-        ]
+        ],
+        gradeOptions
       )}
       ${cards || `<p class="empty">${emptyCopy}</p>`}
     </main>
