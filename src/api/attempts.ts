@@ -7,6 +7,7 @@ import { authMiddleware } from '../middleware/auth';
 const attemptPatchSchema = z.object({
   attempted_on: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   result: z.enum(['send', 'attempt']).optional(),
+  climb_type: z.enum(['', 'top_rope', 'lead', 'autobelay']).optional(),
   flashed: z.union([z.literal(0), z.literal(1)]).optional(),
   high_point: z.string().trim().max(200).optional(),
   notes: z.string().max(4000).optional(),

@@ -4,6 +4,7 @@ import {
   getToken,
   setToken,
   type Attempt,
+  type ClimbType,
   type Discipline,
   type Gym,
   type LinkedRoute,
@@ -14,6 +15,7 @@ import {
   type RouteImage,
   type RouteMarker,
   type RouteWithGym,
+  type RouteWithStats,
   type Route,
 } from './api';
 import { detectHolds } from './detect';
@@ -59,13 +61,38 @@ function colorHex(color: string): string {
   return '#6b665f';
 }
 
-// Key order drives select-option order; top rope is the default discipline.
+// Key order drives select-option order; rope is the default route type.
 const DISCIPLINE_LABELS: Record<Discipline, string> = {
-  top_rope: 'Top rope',
+  route: 'Route',
   boulder: 'Boulder',
+};
+
+// How a roped route was climbed, recorded per attempt (boulders have none).
+// Key order drives the toggle order; top rope is the default.
+const CLIMB_TYPE_LABELS: Record<ClimbType, string> = {
+  top_rope: 'Top rope',
   lead: 'Lead',
   autobelay: 'Auto belay',
 };
+
+// What to show for a logged climb: the climb style for roped routes,
+// "Boulder" for boulders.
+function logTypeLabel(e: { route_discipline: Discipline; climb_type: ClimbType | '' }): string {
+  if (e.route_discipline === 'boulder') return DISCIPLINE_LABELS.boulder;
+  return e.climb_type ? CLIMB_TYPE_LABELS[e.climb_type] : DISCIPLINE_LABELS.route;
+}
+
+// Segmented top rope / lead / auto belay control for the log-attempt forms;
+// only rendered for roped routes.
+function climbTypeSeg(selected: ClimbType = 'top_rope'): string {
+  const opts = (Object.keys(CLIMB_TYPE_LABELS) as ClimbType[])
+    .map(
+      (t) =>
+        `<label><input type="radio" name="climb_type" value="${t}" ${t === selected ? 'checked' : ''} /><span>${CLIMB_TYPE_LABELS[t]}</span></label>`
+    )
+    .join('');
+  return `<div class="seg climb-seg">${opts}</div>`;
+}
 
 const BOULDER_GRADES = ['VB', 'V0', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8'];
 const ROPE_GRADES = [
@@ -1608,7 +1635,7 @@ async function renderLog(): Promise<void> {
 
   const items = visible
     .map((e) => {
-      const meta = [e.gym_name, DISCIPLINE_LABELS[e.route_discipline]].filter(Boolean).join(' · ');
+      const meta = [e.gym_name, logTypeLabel(e)].filter(Boolean).join(' · ');
       const detail = [e.high_point, e.notes].filter(Boolean).join(' — ');
       return `<a class="route-card log-entry" href="#/route/${esc(e.route_id)}">
         <span class="tape" style="background:${colorHex(e.route_color)}"></span>
@@ -1726,6 +1753,7 @@ async function renderLogNew(): Promise<void> {
           <label><input type="radio" name="result" value="send" checked /><span>Sent</span></label>
           <label><input type="radio" name="result" value="attempt" /><span>Didn't send</span></label>
         </div>
+        <div id="climb-seg-wrap" class="hidden">${climbTypeSeg()}</div>
         <label class="flash-toggle"><input type="checkbox" name="flashed" /><span>Flash <span class="hint">(sent it on the very first try)</span></span></label>
         <label>Date <input type="date" name="attempted_on" value="${todayStr()}" required /></label>
         <label>How far? <span class="hint">(if you didn't send)</span>
@@ -1745,6 +1773,18 @@ async function renderLogNew(): Promise<void> {
   const colorInput = form.querySelector<HTMLInputElement>('input[name=color]')!;
   const gradeInput = form.querySelector<HTMLInputElement>('input[name=grade]')!;
   const disciplineSelect = form.querySelector<HTMLSelectElement>('select[name=discipline]')!;
+  const climbSegWrap = document.getElementById('climb-seg-wrap')!;
+  const routeDiscipline = new Map<string, Discipline>();
+
+  // The climb-style toggle only applies to roped routes: a new route with the
+  // Route type selected, or an existing route that's roped.
+  function syncClimbSeg(): void {
+    const roped =
+      routeSelect.value === NEW_ROUTE
+        ? disciplineSelect.value === 'route'
+        : routeDiscipline.get(routeSelect.value) === 'route';
+    climbSegWrap.classList.toggle('hidden', !roped);
+  }
 
   form.querySelectorAll<HTMLButtonElement>('.swatch').forEach((btn) =>
     btn.addEventListener('click', () => {
@@ -1771,14 +1811,18 @@ async function renderLogNew(): Promise<void> {
     }
   }
   renderGradeChips();
-  disciplineSelect.addEventListener('change', renderGradeChips);
+  disciplineSelect.addEventListener('change', () => {
+    renderGradeChips();
+    syncClimbSeg();
+  });
 
   function syncNewRouteFields(): void {
     newRouteFields.classList.toggle('hidden', routeSelect.value !== NEW_ROUTE);
+    syncClimbSeg();
   }
 
   async function loadRouteOptions(): Promise<void> {
-    let routes: { id: string; name: string; color: string; grade: string; last_attempted_on: string | null }[] = [];
+    let routes: RouteWithStats[] = [];
     try {
       routes = (await api.listRoutes(selectedGymId)).routes;
     } catch (err) {
@@ -1786,7 +1830,9 @@ async function renderLogNew(): Promise<void> {
     }
     routes.sort((a, b) => (b.last_attempted_on ?? '').localeCompare(a.last_attempted_on ?? ''));
     routeSelect.textContent = '';
+    routeDiscipline.clear();
     for (const r of routes) {
+      routeDiscipline.set(r.id, r.discipline);
       const opt = document.createElement('option');
       opt.value = r.id;
       opt.textContent = `${routeTitle(r)}${r.grade ? ` (${r.grade})` : ''}`;
@@ -1829,6 +1875,7 @@ async function renderLogNew(): Promise<void> {
       await api.createAttempt(routeId, {
         attempted_on: String(data.get('attempted_on')),
         result: String(data.get('result')) as 'send' | 'attempt',
+        climb_type: (data.get('climb_type') as ClimbType | null) ?? '',
         flashed: flashedFromForm(data),
         high_point: String(data.get('high_point') ?? ''),
         notes: String(data.get('notes') ?? ''),
@@ -2126,6 +2173,7 @@ async function renderRouteDetail(routeId: string): Promise<void> {
         <div class="attempt-line">
           <span class="attempt-result">${isFlash ? 'FLASH' : a.result === 'send' ? 'SENT' : 'attempt'}</span>
           <span class="attempt-date">${esc(a.attempted_on)}</span>
+          ${a.climb_type ? `<span class="attempt-climb">${CLIMB_TYPE_LABELS[a.climb_type]}</span>` : ''}
           ${
             canFlash
               ? `<button class="linkish flash-chip ${isFlash ? 'on' : ''}" data-flash-attempt="${esc(a.id)}"
@@ -2197,6 +2245,7 @@ async function renderRouteDetail(routeId: string): Promise<void> {
           <label><input type="radio" name="result" value="attempt" checked /><span>Didn't send</span></label>
           <label><input type="radio" name="result" value="send" /><span>Sent</span></label>
         </div>
+        ${route.discipline === 'route' ? climbTypeSeg() : ''}
         <label class="flash-toggle hidden"><input type="checkbox" name="flashed" /><span>Flash <span class="hint">(sent it on the very first try)</span></span></label>
         <label>Date <input type="date" name="attempted_on" value="${todayStr()}" required /></label>
         <label>How far? <input name="high_point" placeholder="past the crux, 3rd clip, off the ground…" /></label>
@@ -2335,6 +2384,7 @@ async function renderRouteDetail(routeId: string): Promise<void> {
       await api.createAttempt(route.id, {
         attempted_on: String(data.get('attempted_on')),
         result: String(data.get('result')) as 'send' | 'attempt',
+        climb_type: (data.get('climb_type') as ClimbType | null) ?? '',
         flashed: flashedFromForm(data),
         high_point: String(data.get('high_point') ?? ''),
         notes: String(data.get('notes') ?? ''),

@@ -648,6 +648,14 @@ input[type='radio'] {
   font-size: 13px;
 }
 
+.attempt-climb {
+  color: var(--chalk-dim);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .attempt-detail {
   color: var(--chalk-dim);
   font-size: 14px;
