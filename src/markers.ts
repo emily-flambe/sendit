@@ -1,4 +1,4 @@
-import type { RouteMarker } from './types';
+import type { DrawingItem, RouteMarker } from './types';
 
 // Crop rectangle normalized to the (already rotated) image frame.
 export interface EditTransform {
@@ -59,4 +59,49 @@ export function transformMarker(marker: RouteMarker, edit: EditTransform): Route
 
 export function transformMarkers(markers: RouteMarker[], edit: EditTransform): RouteMarker[] {
   return markers.map((m) => transformMarker(m, edit)).filter((m): m is RouteMarker => m !== null);
+}
+
+// Remap drawing items through the same rotate-then-crop. A text label is
+// dropped when its anchor leaves the frame; a stroke is dropped only when
+// every point does (surviving points clamp to the edge, like polygons).
+export function transformDrawings(items: DrawingItem[], edit: EditTransform): DrawingItem[] {
+  const { crop } = edit;
+  const mapPoint = ([px, py]: [number, number]): [number, number] => {
+    let x = px;
+    let y = py;
+    for (let turn = 0; turn < edit.rotate; turn++) [x, y] = [1 - y, x];
+    return [(x - crop.x) / crop.w, (y - crop.y) / crop.h];
+  };
+  // width/size are fractions of image width, so rotation rescales by the
+  // aspect ratio per quarter turn and crop by 1/crop.w — same math as marker r.
+  let widthScale = 1;
+  {
+    let w = edit.width;
+    let h = edit.height;
+    for (let turn = 0; turn < edit.rotate; turn++) {
+      widthScale *= w / h;
+      [w, h] = [h, w];
+    }
+    widthScale /= crop.w;
+  }
+  const inFrame = ([x, y]: [number, number]): boolean => x >= 0 && x <= 1 && y >= 0 && y <= 1;
+  const clamp = (v: number): number => Math.min(1, Math.max(0, v));
+
+  const out: DrawingItem[] = [];
+  for (const item of items) {
+    if (item.kind === 'text') {
+      const [x, y] = mapPoint([item.x, item.y]);
+      if (!inFrame([x, y])) continue;
+      out.push({ ...item, x, y, size: item.size * widthScale });
+    } else {
+      const pts = item.points.map(mapPoint);
+      if (!pts.some(inFrame)) continue;
+      out.push({
+        ...item,
+        width: item.width * widthScale,
+        points: pts.map(([x, y]) => [clamp(x), clamp(y)] as [number, number]),
+      });
+    }
+  }
+  return out;
 }

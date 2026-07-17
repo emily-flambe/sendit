@@ -12,6 +12,7 @@ import {
   type Photo,
   type PhotoEdit,
   type PhotoWithLinks,
+  type DrawingItem,
   type RouteImage,
   type RouteMarker,
   type RouteWithGym,
@@ -425,7 +426,7 @@ const XLINK_NS = 'http://www.w3.org/1999/xlink';
 // Bake the spotlit image to a JPEG and hand it to the browser as a download.
 // The photo is inlined as a data URL because blob: hrefs don't resolve inside
 // an SVG rasterized via <img>.
-async function downloadRouteImage(image: RouteImage, photoV: number, filename: string): Promise<void> {
+async function downloadRouteImage(image: RouteImage, photoV: number, filename: string, drawings: DrawingItem[] = []): Promise<void> {
   const url = await photoUrl(image.photo_id, photoV);
   const blob = await (await fetch(url)).blob();
   const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -444,6 +445,7 @@ async function downloadRouteImage(image: RouteImage, photoV: number, filename: s
   const h = probe.naturalHeight;
 
   const svg = buildSpotlightSvg(image.markers, w, h, dataUrl);
+  if (drawings.length > 0) drawDrawings(svg, drawings, w, h);
   svg.setAttribute('xmlns', SVG_NS);
   svg.setAttribute('xmlns:xlink', XLINK_NS);
   svg.setAttribute('width', String(w));
@@ -534,6 +536,73 @@ function drawMarkers(svg: SVGSVGElement, markers: RouteMarker[], w: number, h: n
   }
 }
 
+// Fixed palette for the free-drawing layer; the route color leads so a drawing
+// defaults to matching the route.
+const DRAW_PALETTE = ['#ffffff', '#111111', '#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#ff2d95'] as const;
+const DEFAULT_STROKE_WIDTH = 0.008; // fraction of image width
+const TEXT_SIZE = 0.05; // fixed, fraction of image width
+const MAX_DRAWINGS = 200; // mirrors the API cap
+const MAX_STROKE_POINTS = 500; // mirrors the API's per-stroke point cap
+
+// Freehand strokes + text labels, on top of everything. All natural-pixel
+// units so it survives resize/zoom the same way markers do.
+function drawDrawings(svg: SVGSVGElement, items: DrawingItem[], w: number, h: number): void {
+  for (const item of items) {
+    if (item.kind === 'stroke') {
+      if (item.points.length < 2) continue;
+      svg.appendChild(svgEl('polyline', {
+        points: item.points.map(([px, py]) => `${px * w},${py * h}`).join(' '),
+        fill: 'none',
+        stroke: item.color,
+        'stroke-width': String(item.width * w),
+        'stroke-linecap': 'round',
+        'stroke-linejoin': 'round',
+      }));
+    } else {
+      const t = svgEl('text', {
+        x: String(item.x * w),
+        y: String(item.y * h),
+        fill: item.color,
+        stroke: 'rgba(255,255,255,0.9)',
+        'stroke-width': String(item.size * w * 0.12),
+        'paint-order': 'stroke',
+        'font-size': String(item.size * w),
+        'font-family': 'system-ui, sans-serif',
+        'font-weight': '700',
+        'text-anchor': 'middle',
+        'dominant-baseline': 'central',
+      });
+      t.textContent = item.text;
+      svg.appendChild(t);
+    }
+  }
+}
+
+// Shortest distance (px) from a normalized point to a drawing item, for the
+// eraser's hit-test. Text is treated as a box around its anchor.
+function drawingHitDistance(item: DrawingItem, nx: number, ny: number, w: number, h: number): number {
+  if (item.kind === 'text') {
+    const halfW = (item.size * w * item.text.length * 0.3);
+    const halfH = item.size * h * 0.6;
+    const dx = Math.max(0, Math.abs((item.x - nx) * w) - halfW);
+    const dy = Math.max(0, Math.abs((item.y - ny) * h) - halfH);
+    return Math.hypot(dx, dy);
+  }
+  let best = Infinity;
+  const px = nx * w;
+  const py = ny * h;
+  for (let i = 0; i < item.points.length - 1; i++) {
+    const [ax, ay] = [item.points[i][0] * w, item.points[i][1] * h];
+    const [bx, by] = [item.points[i + 1][0] * w, item.points[i + 1][1] * h];
+    const vx = bx - ax;
+    const vy = by - ay;
+    const len2 = vx * vx + vy * vy;
+    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2));
+    best = Math.min(best, Math.hypot(px - (ax + t * vx), py - (ay + t * vy)));
+  }
+  return best;
+}
+
 // Photo + marker overlay. Markers are normalized; the SVG viewBox uses the
 // image's natural pixel size so circles stay circular at any display size.
 // With focus=true the saved route image renders spotlit — holds bright and
@@ -544,7 +613,7 @@ function annotatedImage(
   photoV: number,
   markers: () => RouteMarker[],
   color: string,
-  opts: { focus?: boolean; outlines?: () => boolean } = {}
+  opts: { focus?: boolean; outlines?: () => boolean; drawings?: () => DrawingItem[]; showDrawings?: () => boolean } = {}
 ): { wrap: HTMLDivElement; rerender: () => void } {
   const wrap = document.createElement('div');
   wrap.className = 'annot-wrap';
@@ -566,6 +635,7 @@ function annotatedImage(
     } else {
       drawMarkers(svg, markers(), w, h, colorHex(color), 'edit');
     }
+    if (opts.drawings && (opts.showDrawings?.() ?? true)) drawDrawings(svg, opts.drawings(), w, h);
   };
   img.addEventListener('load', rerender);
   return { wrap, rerender };
@@ -581,10 +651,26 @@ function capturePointer(el: Element, pointerId: number): void {
   }
 }
 
+// When draw mode is active, a one-finger drag captures a freehand stroke
+// instead of panning; two fingers still pinch-zoom. A one-finger tap (no
+// travel) still reaches onTap, so the eraser works.
+interface DrawHooks {
+  active: () => boolean;
+  start: (cx: number, cy: number) => void;
+  move: (cx: number, cy: number) => void;
+  commit: () => void;
+  cancel: () => void;
+}
+
 // Pinch / scroll / drag zoom for a full-screen overlay body. Taps (total
 // pointer travel under a finger-slop threshold) are forwarded to onTap in
 // client coordinates; everything else pans or zooms the wrapped content.
-function wireZoomAndTap(body: HTMLElement, wrap: HTMLElement, onTap: ((x: number, y: number) => void) | null): void {
+function wireZoomAndTap(
+  body: HTMLElement,
+  wrap: HTMLElement,
+  onTap: ((x: number, y: number) => void) | null,
+  draw?: DrawHooks
+): void {
   const TAP_SLOP = 8;
   let scale = 1;
   let tx = 0;
@@ -592,6 +678,7 @@ function wireZoomAndTap(body: HTMLElement, wrap: HTMLElement, onTap: ((x: number
   const pointers = new Map<number, { x: number; y: number; startX: number; startY: number }>();
   let pinchStart: { dist: number; scale: number } | null = null;
   let gestureMoved = false;
+  let stroking = false;
 
   wrap.style.transformOrigin = '0 0';
   body.style.touchAction = 'none';
@@ -644,6 +731,11 @@ function wireZoomAndTap(body: HTMLElement, wrap: HTMLElement, onTap: ((x: number
     if (pointers.size === 1) gestureMoved = false;
     if (pointers.size === 2) {
       gestureMoved = true; // two fingers is never a tap
+      // A second finger means a zoom, not a stroke — abandon any in-progress one.
+      if (stroking) {
+        draw?.cancel();
+        stroking = false;
+      }
       const [a, b] = [...pointers.values()];
       pinchStart = { dist: Math.hypot(a.x - b.x, a.y - b.y), scale };
     }
@@ -663,6 +755,12 @@ function wireZoomAndTap(body: HTMLElement, wrap: HTMLElement, onTap: ((x: number
       const [a, b] = [...pointers.values()];
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
       zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, (pinchStart.scale * dist) / pinchStart.dist);
+    } else if (pointers.size === 1 && draw?.active() && gestureMoved) {
+      if (!stroking) {
+        stroking = true;
+        draw.start(p.startX, p.startY);
+      }
+      draw.move(e.clientX, e.clientY);
     } else if (pointers.size === 1 && scale > 1 && gestureMoved) {
       tx += dx;
       ty += dy;
@@ -674,6 +772,11 @@ function wireZoomAndTap(body: HTMLElement, wrap: HTMLElement, onTap: ((x: number
     const p = pointers.get(e.pointerId);
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinchStart = null;
+    if (stroking && pointers.size === 0) {
+      draw?.commit();
+      stroking = false;
+      return;
+    }
     if (e.type === 'pointerup' && p && !gestureMoved && pointers.size === 0 && onTap) {
       onTap(e.clientX, e.clientY);
     }
@@ -708,21 +811,27 @@ function openRouteImageViewer(image: RouteImage, photoV: number, color: string, 
   closeBtn.addEventListener('click', () => overlay.remove());
   head.prepend(closeBtn);
   let showOutlines = false;
+  const hasDrawings = image.drawings.length > 0;
+  let showDrawings = hasDrawings;
   const actions = document.createElement('span');
   actions.className = 'annot-head-actions';
   const outlineBtn = document.createElement('button');
   outlineBtn.className = 'btn ghost';
   outlineBtn.textContent = 'Outlines';
+  const drawingBtn = document.createElement('button');
+  drawingBtn.className = 'btn ghost';
+  drawingBtn.textContent = 'Drawing ✓';
   const dlBtn = document.createElement('button');
   dlBtn.className = 'btn ghost';
   dlBtn.textContent = '⬇';
   dlBtn.setAttribute('aria-label', 'Download image');
-  actions.append(outlineBtn, dlBtn);
+  if (hasDrawings) actions.append(outlineBtn, drawingBtn, dlBtn);
+  else actions.append(outlineBtn, dlBtn);
   head.appendChild(actions);
   dlBtn.addEventListener('click', async () => {
     dlBtn.disabled = true;
     try {
-      await downloadRouteImage(image, photoV, downloadName);
+      await downloadRouteImage(image, photoV, downloadName, showDrawings ? image.drawings : []);
     } catch {
       toast('Could not build the download.');
     } finally {
@@ -732,10 +841,17 @@ function openRouteImageViewer(image: RouteImage, photoV: number, color: string, 
   const { wrap, rerender } = annotatedImage(image.photo_id, photoV, () => image.markers, color, {
     focus: true,
     outlines: () => showOutlines,
+    drawings: () => image.drawings,
+    showDrawings: () => showDrawings,
   });
   outlineBtn.addEventListener('click', () => {
     showOutlines = !showOutlines;
     outlineBtn.textContent = showOutlines ? 'Outlines ✓' : 'Outlines';
+    rerender();
+  });
+  drawingBtn.addEventListener('click', () => {
+    showDrawings = !showDrawings;
+    drawingBtn.textContent = showDrawings ? 'Drawing ✓' : 'Drawing';
     rerender();
   });
   body.appendChild(wrap);
@@ -743,15 +859,19 @@ function openRouteImageViewer(image: RouteImage, photoV: number, color: string, 
   hydratePhotos(overlay);
 }
 
+type AnnotMode = 'holds' | 'draw' | 'text';
+
 function openRouteImageEditor(
   routeId: string,
   photoId: string,
   photoV: number,
   initial: RouteMarker[],
   color: string,
-  onSaved: () => void
+  onSaved: () => void,
+  initialDrawings: DrawingItem[] = []
 ): void {
   const markers: RouteMarker[] = initial.map((m) => ({ ...m }));
+  const drawings: DrawingItem[] = initialDrawings.map((d) => ({ ...d }));
 
   const { overlay, head, body, foot } = annotOverlay('Mark the holds');
   const cancelBtn = document.createElement('button');
@@ -801,9 +921,100 @@ function openRouteImageEditor(
   syncSizeDot();
   sizeRow.append(sizeDot, sizeInput);
 
+  // Mode switcher: mark holds, freehand-draw, or place text labels.
+  let annotMode: AnnotMode = 'holds';
+  const modeRow = document.createElement('div');
+  modeRow.className = 'annot-mode-row';
+  const modeBtns: Record<AnnotMode, HTMLButtonElement> = {
+    holds: document.createElement('button'),
+    draw: document.createElement('button'),
+    text: document.createElement('button'),
+  };
+  modeBtns.holds.textContent = '⃝ Holds';
+  modeBtns.draw.textContent = '✏️ Draw';
+  modeBtns.text.textContent = 'T Text';
+  for (const [m, btn] of Object.entries(modeBtns) as [AnnotMode, HTMLButtonElement][]) {
+    btn.className = 'btn ghost annot-mode-btn';
+    btn.addEventListener('click', () => setMode(m));
+  }
+  modeRow.append(modeBtns.holds, modeBtns.draw, modeBtns.text);
+
+  // Shared color + width for the drawing layer. Colors are a fixed palette;
+  // the width slider drives stroke thickness (text uses a fixed size).
+  let drawColor: string = DRAW_PALETTE[2];
+  let strokeWidth = DEFAULT_STROKE_WIDTH;
+  const colorRow = document.createElement('div');
+  colorRow.className = 'annot-color-row hidden';
+  const swatches: HTMLButtonElement[] = DRAW_PALETTE.map((hex) => {
+    const s = document.createElement('button');
+    s.className = 'annot-swatch';
+    s.style.background = hex;
+    s.setAttribute('aria-label', `Color ${hex}`);
+    s.addEventListener('click', () => {
+      drawColor = hex;
+      syncSwatches();
+    });
+    colorRow.appendChild(s);
+    return s;
+  });
+  const syncSwatches = () => {
+    swatches.forEach((s, i) => s.classList.toggle('selected', DRAW_PALETTE[i] === drawColor));
+  };
+  syncSwatches();
+
+  const widthRow = document.createElement('div');
+  widthRow.className = 'annot-size-row hidden';
+  const widthDot = document.createElement('span');
+  widthDot.className = 'annot-size-dot';
+  const widthInput = document.createElement('input');
+  widthInput.type = 'range';
+  widthInput.min = '0.003';
+  widthInput.max = '0.03';
+  widthInput.step = '0.001';
+  widthInput.value = String(strokeWidth);
+  widthInput.setAttribute('aria-label', 'Stroke width');
+  const syncWidthDot = () => {
+    const px = Math.round(6 + ((strokeWidth - 0.003) / (0.03 - 0.003)) * 22);
+    widthDot.style.width = `${px}px`;
+    widthDot.style.height = `${px}px`;
+    widthDot.style.background = drawColor;
+    widthDot.style.borderColor = drawColor;
+  };
+  widthInput.addEventListener('input', () => {
+    strokeWidth = Number(widthInput.value);
+    syncWidthDot();
+  });
+  syncWidthDot();
+  widthRow.append(widthDot, widthInput);
+
+  // Text entry: a tap sets the anchor, then the label is typed here.
+  let pendingText: { x: number; y: number } | null = null;
+  const textRow = document.createElement('div');
+  textRow.className = 'annot-text-row hidden';
+  const textInput = document.createElement('input');
+  textInput.type = 'text';
+  textInput.maxLength = 100;
+  textInput.placeholder = 'Tap the image, then type…';
+  textInput.className = 'annot-text-input';
+  const placeBtn = document.createElement('button');
+  placeBtn.className = 'btn ghost';
+  placeBtn.textContent = 'Place';
+  textRow.append(textInput, placeBtn);
+
+  // Undo / clear act on the drawing layer.
+  const drawActions = document.createElement('div');
+  drawActions.className = 'annot-btn-row hidden';
+  const undoBtn = document.createElement('button');
+  undoBtn.className = 'btn ghost detect-btn';
+  undoBtn.textContent = '↩ Undo';
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'btn ghost detect-btn';
+  clearBtn.textContent = '🗑 Clear';
+  drawActions.append(undoBtn, clearBtn);
+
   const hint = document.createElement('p');
   hint.className = 'annot-hint';
-  foot.append(btnRow, sizeRow, hint);
+  foot.append(modeRow, btnRow, sizeRow, colorRow, widthRow, textRow, drawActions, hint);
 
   const { wrap } = annotatedImage(photoId, photoV, () => markers, color);
   body.appendChild(wrap);
@@ -816,8 +1027,32 @@ function openRouteImageEditor(
   let drawMode = false;
   let trace: [number, number][] = [];
   let preview = false;
+  // In-progress freehand stroke (draw mode), normalized points.
+  let stroke: [number, number][] = [];
+
+  function setMode(next: AnnotMode): void {
+    annotMode = next;
+    // Leaving holds mode drops any in-progress trace/preview.
+    if (next !== 'holds') {
+      drawMode = false;
+      trace = [];
+      preview = false;
+    }
+    if (next !== 'text') pendingText = null;
+    sync();
+  }
 
   function syncHint(): void {
+    if (annotMode === 'draw') {
+      hint.textContent = 'Drag to draw. Tap a stroke to erase it. Two fingers to zoom.';
+      return;
+    }
+    if (annotMode === 'text') {
+      hint.textContent = pendingText
+        ? 'Type your label, then Place. Tap a label to erase it.'
+        : 'Tap where the label should go. Tap a label to erase it.';
+      return;
+    }
     if (drawMode) {
       hint.textContent =
         trace.length === 0
@@ -857,7 +1092,20 @@ function openRouteImageEditor(
     });
   }
 
+  function drawStroke(w: number, h: number): void {
+    if (stroke.length < 2) return;
+    svg.appendChild(svgEl('polyline', {
+      points: stroke.map(([px, py]) => `${px * w},${py * h}`).join(' '),
+      fill: 'none',
+      stroke: drawColor,
+      'stroke-width': String(strokeWidth * w),
+      'stroke-linecap': 'round',
+      'stroke-linejoin': 'round',
+    }));
+  }
+
   function sync(): void {
+    const drawingMode = annotMode === 'draw' || annotMode === 'text';
     if (drawMode && trace.length > 0) {
       saveBtn.textContent = trace.length >= 3 ? 'Done' : 'Save';
       saveBtn.disabled = trace.length < 3;
@@ -865,12 +1113,22 @@ function openRouteImageEditor(
       saveBtn.textContent = `Save (${markers.length})`;
       saveBtn.disabled = markers.length === 0;
     }
+    for (const [m, btn] of Object.entries(modeBtns) as [AnnotMode, HTMLButtonElement][]) {
+      btn.classList.toggle('active', annotMode === m);
+    }
     traceBtn.textContent = !drawMode ? '⬠ Draw shape' : trace.length > 0 ? '↩ Undo point' : '⬠ Drawing ✓';
     previewBtn.textContent = preview ? '◐ Preview ✓' : '◐ Preview';
     previewBtn.disabled = drawMode;
     detectBtn.disabled = drawMode;
-    sizeRow.classList.toggle('hidden', drawMode || preview);
-    cancelBtn.textContent = !drawMode ? 'Cancel' : trace.length > 0 ? 'Cancel shape' : 'Stop drawing';
+    btnRow.classList.toggle('hidden', drawingMode);
+    sizeRow.classList.toggle('hidden', drawingMode || drawMode || preview);
+    colorRow.classList.toggle('hidden', !drawingMode);
+    widthRow.classList.toggle('hidden', annotMode !== 'draw');
+    textRow.classList.toggle('hidden', annotMode !== 'text');
+    drawActions.classList.toggle('hidden', !drawingMode);
+    undoBtn.disabled = drawings.length === 0;
+    clearBtn.disabled = drawings.length === 0;
+    cancelBtn.textContent = drawMode ? (trace.length > 0 ? 'Cancel shape' : 'Stop drawing') : 'Cancel';
     syncHint();
     if (img.naturalWidth) {
       const w = img.naturalWidth;
@@ -883,6 +1141,8 @@ function openRouteImageEditor(
         drawMarkers(svg, markers, w, h, colorHex(color), 'edit');
         drawTrace(w, h);
       }
+      drawDrawings(svg, drawings, w, h);
+      drawStroke(w, h);
     }
   }
   sync();
@@ -898,42 +1158,142 @@ function openRouteImageEditor(
   }
 
   // svg's client rect reflects the zoom transform, so normalized coordinates
-  // come out right at any zoom level.
-  wireZoomAndTap(body, wrap, (cx, cy) => {
+  // come out right at any zoom level. Returns null when the point is outside.
+  function toNorm(cx: number, cy: number): [number, number] | null {
     const rect = svg.getBoundingClientRect();
-    if (rect.width === 0 || cx < rect.left || cx > rect.right || cy < rect.top || cy > rect.bottom) return;
-    const nx = (cx - rect.left) / rect.width;
-    const ny = (cy - rect.top) / rect.height;
+    if (rect.width === 0 || cx < rect.left || cx > rect.right || cy < rect.top || cy > rect.bottom) return null;
+    return [(cx - rect.left) / rect.width, (cy - rect.top) / rect.height];
+  }
 
-    if (drawMode) {
-      // Tapping the first vertex closes the shape.
-      if (trace.length >= 3) {
-        const [fx, fy] = trace[0];
-        if (Math.hypot((fx - nx) * rect.width, (fy - ny) * rect.height) < 14) {
-          closeTrace();
-          return;
-        }
+  // Delete the drawing item nearest the point, if any is within tap range.
+  function eraseDrawing(nx: number, ny: number): boolean {
+    if (!img.naturalWidth) return false;
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    const threshold = w * 0.02;
+    let bestIdx = -1;
+    let bestDist = threshold;
+    drawings.forEach((item, i) => {
+      const d = drawingHitDistance(item, nx, ny, w, h);
+      if (d <= bestDist) {
+        bestDist = d;
+        bestIdx = i;
       }
-      if (trace.length < MAX_POLY_POINTS) {
-        trace.push([Math.min(1, Math.max(0, nx)), Math.min(1, Math.max(0, ny))]);
-      }
+    });
+    if (bestIdx >= 0) {
+      drawings.splice(bestIdx, 1);
       sync();
-      return;
+      return true;
     }
+    return false;
+  }
 
-    for (let i = markers.length - 1; i >= 0; i--) {
-      const m = markers[i];
-      const dx = (m.x - nx) * rect.width;
-      const dy = (m.y - ny) * rect.height;
-      const hitRadius = m.r * rect.width + 8;
-      if (dx * dx + dy * dy <= hitRadius * hitRadius) {
-        markers.splice(i, 1);
+  wireZoomAndTap(
+    body,
+    wrap,
+    (cx, cy) => {
+      const norm = toNorm(cx, cy);
+      if (!norm) return;
+      const [nx, ny] = norm;
+      const rect = svg.getBoundingClientRect();
+
+      if (annotMode === 'draw') {
+        eraseDrawing(nx, ny);
+        return;
+      }
+
+      if (annotMode === 'text') {
+        if (eraseDrawing(nx, ny)) return;
+        pendingText = { x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)) };
+        sync();
+        textInput.focus();
+        return;
+      }
+
+      if (drawMode) {
+        // Tapping the first vertex closes the shape.
+        if (trace.length >= 3) {
+          const [fx, fy] = trace[0];
+          if (Math.hypot((fx - nx) * rect.width, (fy - ny) * rect.height) < 14) {
+            closeTrace();
+            return;
+          }
+        }
+        if (trace.length < MAX_POLY_POINTS) {
+          trace.push([Math.min(1, Math.max(0, nx)), Math.min(1, Math.max(0, ny))]);
+        }
         sync();
         return;
       }
+
+      for (let i = markers.length - 1; i >= 0; i--) {
+        const m = markers[i];
+        const dx = (m.x - nx) * rect.width;
+        const dy = (m.y - ny) * rect.height;
+        const hitRadius = m.r * rect.width + 8;
+        if (dx * dx + dy * dy <= hitRadius * hitRadius) {
+          markers.splice(i, 1);
+          sync();
+          return;
+        }
+      }
+      if (markers.length >= MAX_MARKERS) return;
+      markers.push({ x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)), r: tapR });
+      sync();
+    },
+    {
+      active: () => annotMode === 'draw',
+      start: (cx, cy) => {
+        const norm = toNorm(cx, cy);
+        stroke = norm ? [norm] : [];
+      },
+      move: (cx, cy) => {
+        const norm = toNorm(cx, cy);
+        if (!norm) return;
+        // Thin points by a minimum spacing so a stroke stays under the cap.
+        const last = stroke[stroke.length - 1];
+        if (last && Math.hypot(norm[0] - last[0], norm[1] - last[1]) < 0.004) return;
+        if (stroke.length < MAX_STROKE_POINTS) stroke.push(norm);
+        sync();
+      },
+      commit: () => {
+        if (stroke.length >= 2 && drawings.length < MAX_DRAWINGS) {
+          drawings.push({ kind: 'stroke', color: drawColor, width: strokeWidth, points: stroke });
+        }
+        stroke = [];
+        sync();
+      },
+      cancel: () => {
+        stroke = [];
+        sync();
+      },
     }
-    if (markers.length >= MAX_MARKERS) return;
-    markers.push({ x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)), r: tapR });
+  );
+
+  function commitText(): void {
+    const text = textInput.value.trim();
+    if (pendingText && text && drawings.length < MAX_DRAWINGS) {
+      drawings.push({ kind: 'text', color: drawColor, size: TEXT_SIZE, x: pendingText.x, y: pendingText.y, text });
+    }
+    pendingText = null;
+    textInput.value = '';
+    sync();
+  }
+  placeBtn.addEventListener('click', commitText);
+  textInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitText();
+    }
+  });
+
+  undoBtn.addEventListener('click', () => {
+    drawings.pop();
+    sync();
+  });
+  clearBtn.addEventListener('click', () => {
+    if (drawings.length === 0 || !confirm('Clear all drawings? Holds stay.')) return;
+    drawings.length = 0;
     sync();
   });
 
@@ -1032,7 +1392,7 @@ function openRouteImageEditor(
     }
     saveBtn.disabled = true;
     try {
-      await api.setRouteImage(routeId, photoId, markers);
+      await api.setRouteImage(routeId, photoId, markers, drawings);
       overlay.remove();
       toast('Route image saved.');
       onSaved();
@@ -2266,18 +2626,21 @@ async function renderRouteDetail(routeId: string): Promise<void> {
 
   const rerender = () => void renderRouteDetail(route.id);
   const photoVersion = (photoId: string) => photos.find((p) => p.id === photoId)?.updated_at ?? 0;
-  const editImage = (photoId: string, initial: RouteMarker[]) =>
-    openRouteImageEditor(route.id, photoId, photoVersion(photoId), initial, route.color, rerender);
+  const editImage = (photoId: string, initial: RouteMarker[], drawings: DrawingItem[] = []) =>
+    openRouteImageEditor(route.id, photoId, photoVersion(photoId), initial, route.color, rerender, drawings);
 
   if (routeImage) {
     const image = routeImage;
     const view = document.getElementById('ri-view')!;
-    const { wrap } = annotatedImage(image.photo_id, photoVersion(image.photo_id), () => image.markers, route.color, { focus: true });
+    const { wrap } = annotatedImage(image.photo_id, photoVersion(image.photo_id), () => image.markers, route.color, {
+      focus: true,
+      drawings: () => image.drawings,
+    });
     wrap.addEventListener('click', () =>
       openRouteImageViewer(image, photoVersion(image.photo_id), route.color, routeTitle(route).replace(/\s+/g, '-').toLowerCase())
     );
     view.appendChild(wrap);
-    document.getElementById('ri-edit')!.addEventListener('click', () => editImage(image.photo_id, image.markers));
+    document.getElementById('ri-edit')!.addEventListener('click', () => editImage(image.photo_id, image.markers, image.drawings));
     document.getElementById('ri-remove')!.addEventListener('click', async () => {
       if (!confirm('Remove the route image? The photo itself stays.')) return;
       try {

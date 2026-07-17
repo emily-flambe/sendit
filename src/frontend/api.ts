@@ -101,10 +101,29 @@ export interface RouteMarker {
   polygon?: [number, number][];
 }
 
+export interface DrawingStroke {
+  kind: 'stroke';
+  color: string;
+  width: number;
+  points: [number, number][];
+}
+
+export interface DrawingText {
+  kind: 'text';
+  color: string;
+  size: number;
+  x: number;
+  y: number;
+  text: string;
+}
+
+export type DrawingItem = DrawingStroke | DrawingText;
+
 export interface RouteImage {
   route_id: string;
   photo_id: string;
   markers: RouteMarker[];
+  drawings: DrawingItem[];
   updated_at: number;
 }
 
@@ -189,8 +208,8 @@ export const api = {
       'GET',
       `/routes/${id}`
     ),
-  setRouteImage: (routeId: string, photoId: string, markers: RouteMarker[]) =>
-    request<{ route_image: RouteImage }>('PUT', `/routes/${routeId}/image`, { photo_id: photoId, markers }),
+  setRouteImage: (routeId: string, photoId: string, markers: RouteMarker[], drawings: DrawingItem[] = []) =>
+    request<{ route_image: RouteImage }>('PUT', `/routes/${routeId}/image`, { photo_id: photoId, markers, drawings }),
   deleteRouteImage: (routeId: string) => request<{ success: boolean }>('DELETE', `/routes/${routeId}/image`),
   updateRoute: (id: string, fields: Partial<Route>) => request<{ route: Route }>('PATCH', `/routes/${id}`, fields),
   deleteRoute: (id: string) => request<{ success: boolean }>('DELETE', `/routes/${id}`),

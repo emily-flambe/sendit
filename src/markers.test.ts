@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { markerFromPolygon, transformMarkers, type EditTransform } from './markers';
+import { markerFromPolygon, transformDrawings, transformMarkers, type EditTransform } from './markers';
+import type { DrawingItem } from './types';
 
 const edit = (partial: Partial<EditTransform>): EditTransform => ({
   rotate: 0,
@@ -107,5 +108,56 @@ describe('transformMarkers', () => {
     expect(m.x).toBeCloseTo(0.2);
     expect(m.y).toBeCloseTo(0.2);
     expect(m.r).toBeCloseTo(0.02); // 0.02 * (1000/2000) / 0.5
+  });
+});
+
+describe('transformDrawings', () => {
+  const stroke = (points: [number, number][]): DrawingItem => ({ kind: 'stroke', color: '#ff0000', width: 0.01, points });
+  const text = (x: number, y: number): DrawingItem => ({ kind: 'text', color: '#ff0000', size: 0.05, x, y, text: 'hi' });
+
+  it('is identity for no-op edits', () => {
+    const items = [stroke([[0.2, 0.4], [0.3, 0.5]]), text(0.5, 0.5)];
+    expect(transformDrawings(items, edit({}))).toEqual(items);
+  });
+
+  it('remaps stroke points and width through a crop', () => {
+    const [s] = transformDrawings([stroke([[0.6, 0.1], [0.8, 0.3]])], edit({ crop: { x: 0.5, y: 0, w: 0.5, h: 0.5 } }));
+    expect(s.kind).toBe('stroke');
+    if (s.kind !== 'stroke') return;
+    expect(s.points[0][0]).toBeCloseTo(0.2); // (0.6-0.5)/0.5
+    expect(s.points[0][1]).toBeCloseTo(0.2); // 0.1/0.5
+    expect(s.width).toBeCloseTo(0.02); // 0.01 / 0.5
+  });
+
+  it('drops a text label whose anchor leaves the crop', () => {
+    const result = transformDrawings([text(0.2, 0.8), text(0.75, 0.25)], edit({ crop: { x: 0.5, y: 0, w: 0.5, h: 0.5 } }));
+    expect(result).toHaveLength(1);
+    const [t] = result;
+    expect(t.kind).toBe('text');
+    if (t.kind !== 'text') return;
+    expect(t.x).toBeCloseTo(0.5);
+    expect(t.y).toBeCloseTo(0.5);
+    expect(t.size).toBeCloseTo(0.1); // 0.05 / 0.5
+  });
+
+  it('keeps a stroke while any point survives, clamping the rest to the edge', () => {
+    const [s] = transformDrawings([stroke([[0.4, 0.5], [0.9, 0.5]])], edit({ crop: { x: 0.5, y: 0, w: 0.5, h: 1 } }));
+    expect(s.kind).toBe('stroke');
+    if (s.kind !== 'stroke') return;
+    expect(s.points[0][0]).toBe(0); // (0.4-0.5)/0.5 = -0.2 → clamped to 0
+    expect(s.points[1][0]).toBeCloseTo(0.8); // (0.9-0.5)/0.5
+  });
+
+  it('drops a stroke with every point cropped out', () => {
+    const result = transformDrawings([stroke([[0.1, 0.1], [0.2, 0.2]])], edit({ crop: { x: 0.5, y: 0, w: 0.5, h: 1 } }));
+    expect(result).toHaveLength(0);
+  });
+
+  it('rescales width and text size on a quarter turn', () => {
+    const [s] = transformDrawings([stroke([[0.2, 0.4], [0.3, 0.5]])], edit({ rotate: 1 }));
+    if (s.kind !== 'stroke') return;
+    expect(s.width).toBeCloseTo(0.005); // 0.01 * 1000/2000
+    expect(s.points[0][0]).toBeCloseTo(0.6); // 1 - 0.4
+    expect(s.points[0][1]).toBeCloseTo(0.2);
   });
 });

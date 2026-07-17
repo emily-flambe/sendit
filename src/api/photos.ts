@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Context } from 'hono';
 import type { Env } from '../env';
 import * as queries from '../db/queries';
-import { transformMarkers, type EditTransform } from '../markers';
+import { transformDrawings, transformMarkers, type EditTransform } from '../markers';
 import { authMiddleware } from '../middleware/auth';
 
 export const PHOTO_CONTENT_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
@@ -180,7 +180,8 @@ photos.post('/:id/edit', async (c) => {
   for (const annotation of annotations) {
     const remapped = transformMarkers(annotation.markers, edit);
     if (remapped.length > 0) {
-      await queries.setRouteImageMarkers(c.env.DB, annotation.route_id, remapped);
+      const drawings = transformDrawings(annotation.drawings, edit);
+      await queries.setRouteImageMarkers(c.env.DB, annotation.route_id, remapped, drawings);
     } else {
       // Every marker was cropped out — the annotation no longer exists.
       await queries.deleteRouteImageRow(c.env.DB, annotation.route_id);
