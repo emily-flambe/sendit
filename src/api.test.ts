@@ -469,7 +469,7 @@ describe('photo editing', () => {
   const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
   const EDITED_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x01]);
 
-  async function setupAnnotatedPhoto(markers: Json[]): Promise<{ routeId: string; photoId: string; r2Key: string }> {
+  async function setupAnnotatedPhoto(markers: Json[], drawings: Json[] = []): Promise<{ routeId: string; photoId: string; r2Key: string }> {
     const route = await call('POST', `/api/gyms/${gymId}/routes`, { grade: '5.10b', color: 'purple' }, token);
     const routeId = route.data.route.id as string;
     const res = await app.request(
@@ -479,7 +479,7 @@ describe('photo editing', () => {
     );
     const data = (await res.json()) as Json;
     const photoId = data.photo.id as string;
-    await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers }, token);
+    await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers, drawings }, token);
     return { routeId, photoId, r2Key: data.photo.r2_key as string };
   }
 
@@ -528,6 +528,29 @@ describe('photo editing', () => {
     expect(await env.PHOTOS.get(r2Key)).toBeNull();
     const served = await app.request(`/api/photos/${photoId}`, { headers: { Authorization: `Bearer ${token}` } }, env);
     expect(new Uint8Array(await served.arrayBuffer())).toEqual(EDITED_BYTES);
+  });
+
+  it('overwrite remaps the drawing layer alongside markers', async () => {
+    const { routeId, photoId } = await setupAnnotatedPhoto(
+      [{ x: 0.2, y: 0.4, r: 0.02 }],
+      [
+        { kind: 'stroke', color: '#ff3b30', width: 0.01, points: [[0.2, 0.4], [0.3, 0.5]] },
+        { kind: 'text', color: '#0a84ff', size: 0.05, x: 0.2, y: 0.4, text: 'go' },
+      ]
+    );
+
+    const res = await edit(photoId, 'mode=overwrite&rotate=1&width=1000&height=2000');
+    expect(res.status).toBe(200);
+
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    const [s, t] = detail.data.route_image.drawings;
+    // rotate CW: (x,y) → (1-y, x); width fraction rescales by 1000/2000.
+    expect(s.points[0][0]).toBeCloseTo(0.6);
+    expect(s.points[0][1]).toBeCloseTo(0.2);
+    expect(s.width).toBeCloseTo(0.005);
+    expect(t.x).toBeCloseTo(0.6);
+    expect(t.y).toBeCloseTo(0.2);
+    expect(t.size).toBeCloseTo(0.025);
   });
 
   it('overwrite remaps markers through a crop and drops the ones outside', async () => {
@@ -666,6 +689,45 @@ describe('route images', () => {
     const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
     expect(detail.data.route_image.markers[0].polygon).toHaveLength(4);
     expect(detail.data.route_image.markers[1].polygon).toBeUndefined();
+  });
+
+  it('round-trips the free-drawing layer alongside markers', async () => {
+    const { routeId, photoId } = await createRouteWithPhoto();
+    const drawings = [
+      { kind: 'stroke', color: '#ff3b30', width: 0.01, points: [[0.1, 0.1], [0.2, 0.3], [0.25, 0.4]] },
+      { kind: 'text', color: '#0a84ff', size: 0.05, x: 0.5, y: 0.6, text: 'crux' },
+    ];
+    const set = await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers: MARKERS, drawings }, token);
+    expect(set.status).toBe(200);
+    expect(set.data.route_image.drawings).toEqual(drawings);
+
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.route_image.markers).toEqual(MARKERS);
+    expect(detail.data.route_image.drawings).toEqual(drawings);
+  });
+
+  it('defaults drawings to empty when omitted', async () => {
+    const { routeId, photoId } = await createRouteWithPhoto();
+    const set = await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers: MARKERS }, token);
+    expect(set.status).toBe(200);
+    expect(set.data.route_image.drawings).toEqual([]);
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.route_image.drawings).toEqual([]);
+  });
+
+  it('rejects invalid drawings', async () => {
+    const { routeId, photoId } = await createRouteWithPhoto();
+    for (const drawings of [
+      [{ kind: 'stroke', color: 'red', width: 0.01, points: [[0.1, 0.1], [0.2, 0.2]] }], // color not hex
+      [{ kind: 'stroke', color: '#ff0000', width: 0.01, points: [[0.1, 0.1]] }], // too few points
+      [{ kind: 'stroke', color: '#ff0000', width: 0.01, points: [[1.2, 0.1], [0.2, 0.2]] }], // out of range
+      [{ kind: 'text', color: '#ff0000', size: 0.05, x: 0.5, y: 0.5, text: '' }], // empty text
+      [{ kind: 'blob', color: '#ff0000' }], // unknown kind
+      Array.from({ length: 201 }, () => ({ kind: 'text', color: '#ff0000', size: 0.05, x: 0.5, y: 0.5, text: 'x' })),
+    ]) {
+      const res = await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers: MARKERS, drawings }, token);
+      expect(res.status, JSON.stringify(drawings).slice(0, 60)).toBe(400);
+    }
   });
 
   it('rejects malformed polygons', async () => {

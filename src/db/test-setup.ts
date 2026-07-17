@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS route_images (
   route_id TEXT PRIMARY KEY,
   photo_id TEXT NOT NULL,
   markers TEXT NOT NULL,
+  drawings TEXT NOT NULL DEFAULT '[]',
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE,
   FOREIGN KEY (photo_id) REFERENCES photos(id) ON DELETE CASCADE

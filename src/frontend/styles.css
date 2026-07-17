@@ -1263,6 +1263,83 @@ input[type='radio'] {
   margin-bottom: 8px;
 }
 
+.annot-btn-row.hidden {
+  display: none;
+}
+
+/* mode switcher (holds / draw / text) */
+
+.annot-mode-row {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.annot-mode-btn {
+  padding: 8px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.annot-mode-btn.active {
+  background: var(--chalk, #e8e4da);
+  color: #111;
+}
+
+/* drawing color palette */
+
+.annot-color-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.annot-color-row.hidden {
+  display: none;
+}
+
+.annot-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.annot-swatch.selected {
+  border-color: var(--chalk, #e8e4da);
+  box-shadow: 0 0 0 2px #111, 0 0 0 4px var(--chalk, #e8e4da);
+}
+
+/* text-label entry */
+
+.annot-text-row {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.annot-text-row.hidden {
+  display: none;
+}
+
+.annot-text-input {
+  flex: 1;
+  max-width: min(280px, 60vw);
+  padding: 8px 10px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--chalk, #e8e4da);
+}
+
 .annot-btn-row .detect-btn {
   padding: 8px 10px;
   font-size: 13px;

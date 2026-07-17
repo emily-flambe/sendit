@@ -89,9 +89,30 @@ export interface RouteMarker {
   polygon?: [number, number][];
 }
 
+// Free-drawing annotation layer items, normalized like markers: x/y in [0,1],
+// width/size as fractions of image width.
+export interface DrawingStroke {
+  kind: 'stroke';
+  color: string; // #rrggbb
+  width: number;
+  points: [number, number][];
+}
+
+export interface DrawingText {
+  kind: 'text';
+  color: string; // #rrggbb
+  size: number;
+  x: number;
+  y: number;
+  text: string;
+}
+
+export type DrawingItem = DrawingStroke | DrawingText;
+
 export interface RouteImage {
   route_id: string;
   photo_id: string;
   markers: RouteMarker[];
+  drawings: DrawingItem[];
   updated_at: number;
 }
