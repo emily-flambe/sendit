@@ -137,6 +137,55 @@ describe('gyms and routes', () => {
     expect(row.last_attempted_on).toBe('2026-07-08');
   });
 
+  it('records climb type per attempt and defaults it by route type', async () => {
+    // Roped route: climb type defaults to top rope; an explicit value sticks.
+    const rope = await call('POST', `/api/gyms/${gymId}/routes`, { grade: '5.10a' }, token);
+    expect(rope.data.route.discipline).toBe('route');
+    const ropeId = rope.data.route.id as string;
+
+    const tr = await call(
+      'POST',
+      `/api/routes/${ropeId}/attempts`,
+      { attempted_on: '2026-07-01', result: 'attempt' },
+      token
+    );
+    expect(tr.data.attempt.climb_type).toBe('top_rope');
+
+    const lead = await call(
+      'POST',
+      `/api/routes/${ropeId}/attempts`,
+      { attempted_on: '2026-07-02', result: 'send', climb_type: 'lead' },
+      token
+    );
+    expect(lead.data.attempt.climb_type).toBe('lead');
+
+    // Boulder: climb type is forced empty even if the client sends one.
+    const boulder = await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V4', discipline: 'boulder' }, token);
+    const boulderId = boulder.data.route.id as string;
+    const bAttempt = await call(
+      'POST',
+      `/api/routes/${boulderId}/attempts`,
+      { attempted_on: '2026-07-03', result: 'send', climb_type: 'lead' },
+      token
+    );
+    expect(bAttempt.data.attempt.climb_type).toBe('');
+
+    // Round-trips through the log feed.
+    const log = await call('GET', '/api/attempts', undefined, token);
+    const leadEntry = log.data.entries.find((e: Json) => e.id === lead.data.attempt.id);
+    expect(leadEntry.climb_type).toBe('lead');
+    expect(leadEntry.route_discipline).toBe('route');
+
+    // A bogus climb type is rejected.
+    const bad = await call(
+      'POST',
+      `/api/routes/${ropeId}/attempts`,
+      { attempted_on: '2026-07-04', result: 'send', climb_type: 'solo' },
+      token
+    );
+    expect(bad.status).toBe(400);
+  });
+
   it('archives routes out of the default list', async () => {
     const created = await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V2', color: 'green' }, token);
     const routeId = created.data.route.id as string;

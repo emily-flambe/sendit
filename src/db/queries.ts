@@ -223,6 +223,7 @@ export async function listAttempts(db: D1Database, userId: string, routeId: stri
 export interface AttemptInput {
   attempted_on: string;
   result: Attempt['result'];
+  climb_type: Attempt['climb_type'];
   flashed: number;
   high_point: string;
   notes: string;
@@ -237,14 +238,15 @@ export async function createAttempt(db: D1Database, routeId: string, input: Atte
   };
   await db
     .prepare(
-      `INSERT INTO attempts (id, route_id, attempted_on, result, flashed, high_point, notes, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO attempts (id, route_id, attempted_on, result, climb_type, flashed, high_point, notes, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       attempt.id,
       attempt.route_id,
       attempt.attempted_on,
       attempt.result,
+      attempt.climb_type,
       attempt.flashed,
       attempt.high_point,
       attempt.notes,
@@ -277,8 +279,10 @@ export async function updateAttempt(
 
   const next = { ...existing, ...fields };
   await db
-    .prepare('UPDATE attempts SET attempted_on = ?, result = ?, flashed = ?, high_point = ?, notes = ? WHERE id = ?')
-    .bind(next.attempted_on, next.result, next.flashed, next.high_point, next.notes, attemptId)
+    .prepare(
+      'UPDATE attempts SET attempted_on = ?, result = ?, climb_type = ?, flashed = ?, high_point = ?, notes = ? WHERE id = ?'
+    )
+    .bind(next.attempted_on, next.result, next.climb_type, next.flashed, next.high_point, next.notes, attemptId)
     .run();
   return next;
 }

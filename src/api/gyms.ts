@@ -21,7 +21,7 @@ const routeSchema = z.object({
   grade: z.string().trim().max(32).default(''),
   color: z.string().trim().max(32).default(''),
   wall: z.string().trim().max(120).default(''),
-  discipline: z.enum(['boulder', 'top_rope', 'lead', 'autobelay']).default('top_rope'),
+  discipline: z.enum(['boulder', 'route']).default('route'),
   notes: z.string().max(4000).default(''),
 });
 

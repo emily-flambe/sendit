@@ -10,7 +10,7 @@ const routePatchSchema = z.object({
   grade: z.string().trim().max(32).optional(),
   color: z.string().trim().max(32).optional(),
   wall: z.string().trim().max(120).optional(),
-  discipline: z.enum(['boulder', 'top_rope', 'lead', 'autobelay']).optional(),
+  discipline: z.enum(['boulder', 'route']).optional(),
   notes: z.string().max(4000).optional(),
   archived: z.union([z.literal(0), z.literal(1)]).optional(),
   gym_id: z.string().trim().min(1).optional(),
@@ -41,6 +41,7 @@ const routeImageSchema = z.object({
 const attemptSchema = z.object({
   attempted_on: dateString,
   result: z.enum(['send', 'attempt']),
+  climb_type: z.enum(['', 'top_rope', 'lead', 'autobelay']).default(''),
   flashed: z.union([z.literal(0), z.literal(1)]).default(0),
   high_point: z.string().trim().max(200).default(''),
   notes: z.string().max(4000).default(''),
@@ -192,7 +193,10 @@ routes.post('/:id/attempts', async (c) => {
   if (!parsed.success) {
     return c.json({ error: 'Invalid attempt fields' }, 400);
   }
-  const attempt = await queries.createAttempt(c.env.DB, route.id, parsed.data);
+  // Climb type is meaningless for boulders and defaults to top rope otherwise;
+  // the route determines what's valid, not the client.
+  const climb_type = route.discipline === 'boulder' ? '' : parsed.data.climb_type || 'top_rope';
+  const attempt = await queries.createAttempt(c.env.DB, route.id, { ...parsed.data, climb_type });
   return c.json({ attempt }, 201);
 });
 

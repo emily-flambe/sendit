@@ -14,7 +14,8 @@ export interface Gym {
   created_at: number;
 }
 
-export type Discipline = 'boulder' | 'top_rope' | 'lead' | 'autobelay';
+export type Discipline = 'boulder' | 'route';
+export type ClimbType = 'top_rope' | 'lead' | 'autobelay';
 export type AttemptResult = 'send' | 'attempt';
 
 export interface Route {
@@ -52,6 +53,7 @@ export interface LogEntry {
   gym_id: string;
   attempted_on: string;
   result: AttemptResult;
+  climb_type: ClimbType | '';
   flashed: number;
   high_point: string;
   notes: string;
@@ -111,6 +113,7 @@ export interface Attempt {
   route_id: string;
   attempted_on: string;
   result: AttemptResult;
+  climb_type: ClimbType | '';
   flashed: number;
   high_point: string;
   notes: string;
@@ -194,7 +197,14 @@ export const api = {
 
   createAttempt: (
     routeId: string,
-    fields: { attempted_on: string; result: AttemptResult; flashed?: number; high_point?: string; notes?: string }
+    fields: {
+      attempted_on: string;
+      result: AttemptResult;
+      climb_type?: ClimbType | '';
+      flashed?: number;
+      high_point?: string;
+      notes?: string;
+    }
   ) => request<{ attempt: Attempt }>('POST', `/routes/${routeId}/attempts`, fields),
   updateAttempt: (id: string, fields: Partial<Pick<Attempt, 'attempted_on' | 'result' | 'flashed' | 'high_point' | 'notes'>>) =>
     request<{ attempt: Attempt }>('PATCH', `/attempts/${id}`, fields),

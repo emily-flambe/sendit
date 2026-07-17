@@ -1,4 +1,7 @@
-export type Discipline = 'boulder' | 'top_rope' | 'lead' | 'autobelay';
+// The route itself is just a boulder or a roped route. How a roped route was
+// climbed (top rope / lead / auto belay) is recorded per attempt as climb_type.
+export type Discipline = 'boulder' | 'route';
+export type ClimbType = 'top_rope' | 'lead' | 'autobelay';
 export type AttemptResult = 'send' | 'attempt';
 
 export interface User {
@@ -35,6 +38,7 @@ export interface Attempt {
   route_id: string;
   attempted_on: string;
   result: AttemptResult;
+  climb_type: ClimbType | ''; // '' for boulders, which have no climb style
   flashed: number;
   high_point: string;
   notes: string;
