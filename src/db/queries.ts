@@ -556,6 +556,12 @@ export interface LogEntry extends Attempt {
   route_color: string;
   route_discipline: Route['discipline'];
   gym_name: string;
+  // Route thumbnail: a spotlit route image if one exists, else the first
+  // linked photo. Mirrors the fields listAllRoutes exposes for route cards.
+  first_photo_id: string | null;
+  image_photo_id: string | null;
+  image_markers: string | null;
+  image_photo_v: number | null;
 }
 
 export async function listLog(db: D1Database, userId: string, limit = 100): Promise<LogEntry[]> {
@@ -567,7 +573,11 @@ export async function listLog(db: D1Database, userId: string, limit = 100): Prom
               r.color AS route_color,
               r.discipline AS route_discipline,
               g.id AS gym_id,
-              g.name AS gym_name
+              g.name AS gym_name,
+              (SELECT l.photo_id FROM route_photo_links l WHERE l.route_id = r.id ORDER BY l.created_at LIMIT 1) AS first_photo_id,
+              (SELECT ri.photo_id FROM route_images ri WHERE ri.route_id = r.id) AS image_photo_id,
+              (SELECT ri.markers FROM route_images ri WHERE ri.route_id = r.id) AS image_markers,
+              (SELECT p.updated_at FROM route_images ri JOIN photos p ON p.id = ri.photo_id WHERE ri.route_id = r.id) AS image_photo_v
        FROM attempts a
        JOIN routes r ON r.id = a.route_id
        JOIN gyms g ON g.id = r.gym_id

@@ -1997,6 +1997,13 @@ async function renderLog(): Promise<void> {
     .map((e) => {
       const meta = [e.gym_name, logTypeLabel(e)].filter(Boolean).join(' · ');
       const detail = [e.high_point, e.notes].filter(Boolean).join(' — ');
+      // Same route thumbnail as the routes page: spotlit route image if there
+      // is one (swapped in below), else the route's first linked photo.
+      const thumb = e.image_photo_id
+        ? `<span class="card-thumb" data-spotlight-thumb="${esc(e.route_id)}"></span>`
+        : e.first_photo_id
+          ? `<span class="card-thumb"><img data-photo="${esc(e.first_photo_id)}" alt="" /></span>`
+          : '';
       return `<a class="route-card log-entry" href="#/route/${esc(e.route_id)}">
         <span class="tape" style="background:${colorHex(e.route_color)}"></span>
         <span class="route-card-body">
@@ -2008,6 +2015,7 @@ async function renderLog(): Promise<void> {
           <span class="route-card-meta dim">${esc(e.attempted_on)} · ${esc(recency(e.attempted_on))}</span>
           ${detail ? `<span class="route-card-meta">${esc(detail)}</span>` : ''}
         </span>
+        ${thumb}
         <span class="route-card-grade">${esc(e.route_grade)}</span>
       </a>`;
     })
@@ -2034,6 +2042,18 @@ async function renderLog(): Promise<void> {
     </main>`,
     'log'
   );
+
+  hydratePhotos();
+  document.querySelectorAll<HTMLSpanElement>('[data-spotlight-thumb]').forEach((el) => {
+    const e = visible.find((v) => v.route_id === el.dataset.spotlightThumb);
+    if (!e?.image_photo_id || !e.image_markers) return;
+    try {
+      const markers = JSON.parse(e.image_markers) as RouteMarker[];
+      el.replaceWith(spotlightThumb(e.image_photo_id, e.image_photo_v ?? 0, markers));
+    } catch {
+      el.remove();
+    }
+  });
 
   wireFilterBar(f, () => void renderLog());
 }
