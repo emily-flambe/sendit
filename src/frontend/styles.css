@@ -1424,3 +1424,44 @@ input[type='radio'] {
   color: var(--chalk-dim, #9b958a);
   max-width: 280px;
 }
+
+/* ---------- responsive: tablet / desktop ---------- */
+
+/* Mobile stays a single column. On wider viewports the container grows and the
+   card lists (routes, log) flow into a multi-column grid. Everything in a list
+   spans full width by default; only cards join the grid, so filter bars,
+   buttons, the photo gallery, and the gym list keep their own layout.
+   Single-column pages (route/photo detail, forms, auth) stay centered and
+   readable instead of stretching. */
+@media (min-width: 720px) {
+  #app {
+    max-width: 980px;
+  }
+
+  main.list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+    align-items: start;
+  }
+
+  main.list > * {
+    grid-column: 1 / -1;
+  }
+
+  main.list > .route-card {
+    grid-column: auto;
+  }
+
+  main.detail,
+  main.form-page,
+  main.auth {
+    max-width: 600px;
+    margin-inline: auto;
+  }
+
+  /* Keep the add-route FAB tied to the wider content edge. */
+  .fab {
+    right: max(18px, calc(50% - 478px));
+  }
+}
