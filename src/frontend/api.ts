@@ -63,6 +63,10 @@ export interface LogEntry {
   route_color: string;
   route_discipline: Discipline;
   gym_name: string;
+  first_photo_id: string | null;
+  image_photo_id: string | null;
+  image_markers: string | null;
+  image_photo_v: number | null;
 }
 
 export interface Photo {

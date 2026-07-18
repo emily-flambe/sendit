@@ -885,6 +885,27 @@ describe('cross-gym listing and log feed', () => {
     expect(entry.result).toBe('send');
   });
 
+  it('exposes route thumbnail fields on the log feed', async () => {
+    const route = await call('POST', `/api/gyms/${gymA}/routes`, { grade: 'V2', color: 'orange' }, token);
+    const routeId = route.data.route.id as string;
+    const up = await app.request(
+      `/api/routes/${routeId}/photos`,
+      { method: 'POST', headers: { 'Content-Type': 'image/jpeg', Authorization: `Bearer ${token}` }, body: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]) },
+      env
+    );
+    const photoId = ((await up.json()) as Json).photo.id as string;
+    const markers = [{ x: 0.5, y: 0.5, r: 0.02 }];
+    await call('PUT', `/api/routes/${routeId}/image`, { photo_id: photoId, markers }, token);
+    await call('POST', `/api/routes/${routeId}/attempts`, { attempted_on: '2026-07-11', result: 'attempt' }, token);
+
+    const log = await call('GET', '/api/attempts', undefined, token);
+    const entry = log.data.entries.find((e: Json) => e.route_id === routeId);
+    expect(entry.first_photo_id).toBe(photoId);
+    expect(entry.image_photo_id).toBe(photoId);
+    expect(JSON.parse(entry.image_markers)).toEqual(markers);
+    expect(entry.image_photo_v).toBeGreaterThan(0);
+  });
+
   it('generates a name when none is given', async () => {
     const route = await call('POST', `/api/gyms/${gymA}/routes`, { grade: 'V4', color: 'pink' }, token);
     expect(route.data.route.name).toMatch(/^pink V4 added on \d{4}-\d{2}-\d{2}$/);
