@@ -19,6 +19,8 @@ const routePatchSchema = z.object({
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
 
 export const MAX_ROUTE_IMAGE_MARKERS = 100;
+export const MAX_DRAWING_ITEMS = 200;
+export const MAX_STROKE_POINTS = 500;
 
 // Markers are normalized to the image (x/y in [0,1], r as fraction of width).
 // An optional polygon (auto-detected hold outline) is a ring of [x, y] points.
@@ -33,9 +35,32 @@ const markerSchema = z.object({
     .optional(),
 });
 
+const normPoint = z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)]);
+const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+
+// Free-drawing layer: freehand strokes and placed text labels, normalized to
+// the image the same way markers are.
+const drawingItemSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('stroke'),
+    color: hexColor,
+    width: z.number().gt(0).max(0.25),
+    points: z.array(normPoint).min(2).max(MAX_STROKE_POINTS),
+  }),
+  z.object({
+    kind: z.literal('text'),
+    color: hexColor,
+    size: z.number().gt(0).max(0.5),
+    x: z.number().min(0).max(1),
+    y: z.number().min(0).max(1),
+    text: z.string().trim().min(1).max(100),
+  }),
+]);
+
 const routeImageSchema = z.object({
   photo_id: z.string().trim().min(1),
   markers: z.array(markerSchema).min(1).max(MAX_ROUTE_IMAGE_MARKERS),
+  drawings: z.array(drawingItemSchema).max(MAX_DRAWING_ITEMS).default([]),
 });
 
 const attemptSchema = z.object({
@@ -86,7 +111,7 @@ routes.put('/:id/image', async (c) => {
   if (!photo || !(await queries.isPhotoLinked(c.env.DB, route.id, photo.id))) {
     return c.json({ error: 'Photo not found on this route' }, 404);
   }
-  const route_image = await queries.upsertRouteImage(c.env.DB, route.id, photo.id, parsed.data.markers);
+  const route_image = await queries.upsertRouteImage(c.env.DB, route.id, photo.id, parsed.data.markers, parsed.data.drawings);
   return c.json({ route_image });
 });
 

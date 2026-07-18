@@ -5,6 +5,7 @@ import type {
   Photo,
   PhotoWithLinks,
   Route,
+  DrawingItem,
   RouteImage,
   RouteMarker,
   RouteWithStats,
@@ -433,14 +434,19 @@ export async function listRouteImagesByPhoto(db: D1Database, photoId: string): P
   const result = await db
     .prepare('SELECT * FROM route_images WHERE photo_id = ?')
     .bind(photoId)
-    .all<{ route_id: string; photo_id: string; markers: string; updated_at: number }>();
-  return result.results.map((row) => ({ ...row, markers: JSON.parse(row.markers) as RouteMarker[] }));
+    .all<RouteImageRow>();
+  return result.results.map(parseRouteImageRow);
 }
 
-export async function setRouteImageMarkers(db: D1Database, routeId: string, markers: RouteMarker[]): Promise<void> {
+export async function setRouteImageMarkers(
+  db: D1Database,
+  routeId: string,
+  markers: RouteMarker[],
+  drawings: DrawingItem[]
+): Promise<void> {
   await db
-    .prepare('UPDATE route_images SET markers = ?, updated_at = ? WHERE route_id = ?')
-    .bind(JSON.stringify(markers), Date.now(), routeId)
+    .prepare('UPDATE route_images SET markers = ?, drawings = ?, updated_at = ? WHERE route_id = ?')
+    .bind(JSON.stringify(markers), JSON.stringify(drawings), Date.now(), routeId)
     .run();
 }
 
@@ -452,7 +458,16 @@ interface RouteImageRow {
   route_id: string;
   photo_id: string;
   markers: string;
+  drawings: string | null;
   updated_at: number;
+}
+
+function parseRouteImageRow(row: RouteImageRow): RouteImage {
+  return {
+    ...row,
+    markers: JSON.parse(row.markers) as RouteMarker[],
+    drawings: JSON.parse(row.drawings ?? '[]') as DrawingItem[],
+  };
 }
 
 export async function getRouteImage(db: D1Database, userId: string, routeId: string): Promise<RouteImage | null> {
@@ -466,30 +481,33 @@ export async function getRouteImage(db: D1Database, userId: string, routeId: str
     .bind(routeId, userId)
     .first<RouteImageRow>();
   if (!row) return null;
-  return { ...row, markers: JSON.parse(row.markers) as RouteMarker[] };
+  return parseRouteImageRow(row);
 }
 
 export async function upsertRouteImage(
   db: D1Database,
   routeId: string,
   photoId: string,
-  markers: RouteMarker[]
+  markers: RouteMarker[],
+  drawings: DrawingItem[]
 ): Promise<RouteImage> {
   const image: RouteImage = {
     route_id: routeId,
     photo_id: photoId,
     markers,
+    drawings,
     updated_at: Date.now(),
   };
   await db
     .prepare(
-      `INSERT INTO route_images (route_id, photo_id, markers, updated_at) VALUES (?, ?, ?, ?)
+      `INSERT INTO route_images (route_id, photo_id, markers, drawings, updated_at) VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(route_id) DO UPDATE SET
          photo_id = excluded.photo_id,
          markers = excluded.markers,
+         drawings = excluded.drawings,
          updated_at = excluded.updated_at`
     )
-    .bind(image.route_id, image.photo_id, JSON.stringify(image.markers), image.updated_at)
+    .bind(image.route_id, image.photo_id, JSON.stringify(image.markers), JSON.stringify(image.drawings), image.updated_at)
     .run();
   return image;
 }
