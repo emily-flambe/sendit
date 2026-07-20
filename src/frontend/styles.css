@@ -603,6 +603,10 @@ input[type='radio'] {
   display: none;
 }
 
+#climb-seg-wrap.hidden {
+  display: none;
+}
+
 .history ul {
   list-style: none;
   padding: 0;
