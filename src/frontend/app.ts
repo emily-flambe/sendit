@@ -20,6 +20,7 @@ import {
   type Route,
 } from './api';
 import { detectHolds } from './detect';
+import { paginateByDay, chunk } from './log-pages';
 import { markerFromPolygon } from '../markers';
 
 const GYM_KEY = 'sendit_gym';
@@ -1973,6 +1974,9 @@ function renderLogin(): void {
 
 // ---------- log (landing page) ----------
 
+const LOG_PAGE_SIZE = 25;
+let logPage = 0;
+
 async function renderLog(): Promise<void> {
   let entries: LogEntry[];
   try {
@@ -1993,8 +1997,21 @@ async function renderLog(): Promise<void> {
   if (f.sort === 'oldest') visible.reverse();
   if (f.sort === 'grade') visible.sort((a, b) => gradeRank(b.route_grade) - gradeRank(a.route_grade));
 
-  const items = visible
+  // Days stay whole across pages, except under the grade sort, where entries
+  // from the same day aren't contiguous and plain chunks are the best we can do.
+  const grouped = f.sort !== 'grade';
+  const pages = grouped ? paginateByDay(visible, (e) => e.attempted_on, LOG_PAGE_SIZE) : chunk(visible, LOG_PAGE_SIZE);
+  logPage = Math.min(logPage, Math.max(0, pages.length - 1));
+  const pageEntries = pages[logPage] ?? [];
+
+  let lastDay = '';
+  const items = pageEntries
     .map((e) => {
+      const dayHeading =
+        grouped && e.attempted_on !== lastDay
+          ? `<h3 class="log-day">${esc(e.attempted_on)} · ${esc(recency(e.attempted_on))}</h3>`
+          : '';
+      lastDay = e.attempted_on;
       const meta = [e.gym_name, logTypeLabel(e)].filter(Boolean).join(' · ');
       const detail = [e.high_point, e.notes].filter(Boolean).join(' — ');
       // Same route thumbnail as the routes page: spotlit route image if there
@@ -2004,7 +2021,7 @@ async function renderLog(): Promise<void> {
         : e.first_photo_id
           ? `<span class="card-thumb"><img data-photo="${esc(e.first_photo_id)}" alt="" /></span>`
           : '';
-      return `<a class="route-card log-entry" href="#/route/${esc(e.route_id)}">
+      return `${dayHeading}<a class="route-card log-entry" href="#/route/${esc(e.route_id)}">
         <span class="tape" style="background:${colorHex(e.route_color)}"></span>
         <span class="route-card-body">
           <span class="route-card-top">
@@ -2012,7 +2029,7 @@ async function renderLog(): Promise<void> {
             <span class="attempt-result ${e.result === 'send' ? 'is-send' : ''}">${e.result === 'send' ? 'SENT' : 'attempt'}</span>
           </span>
           <span class="route-card-meta">${esc(meta)}</span>
-          <span class="route-card-meta dim">${esc(e.attempted_on)} · ${esc(recency(e.attempted_on))}</span>
+          ${grouped ? '' : `<span class="route-card-meta dim">${esc(e.attempted_on)} · ${esc(recency(e.attempted_on))}</span>`}
           ${detail ? `<span class="route-card-meta">${esc(detail)}</span>` : ''}
         </span>
         ${thumb}
@@ -2020,6 +2037,15 @@ async function renderLog(): Promise<void> {
       </a>`;
     })
     .join('');
+
+  const pager =
+    pages.length > 1
+      ? `<div class="pager">
+          <button class="btn ghost" data-page="prev" ${logPage === 0 ? 'disabled' : ''}>&lsaquo; Prev</button>
+          <span class="pager-status">Page ${logPage + 1} of ${pages.length}</span>
+          <button class="btn ghost" data-page="next" ${logPage === pages.length - 1 ? 'disabled' : ''}>Next &rsaquo;</button>
+        </div>`
+      : '';
 
   shell(
     `${header('climb log')}
@@ -2039,6 +2065,7 @@ async function renderLog(): Promise<void> {
         ]
       )}
       ${items || '<p class="empty">Nothing logged yet.</p>'}
+      ${pager}
     </main>`,
     'log'
   );
@@ -2055,7 +2082,18 @@ async function renderLog(): Promise<void> {
     }
   });
 
-  wireFilterBar(f, () => void renderLog());
+  document.querySelectorAll<HTMLButtonElement>('.pager button').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      logPage += btn.dataset.page === 'next' ? 1 : -1;
+      window.scrollTo({ top: 0 });
+      void renderLog();
+    })
+  );
+
+  wireFilterBar(f, () => {
+    logPage = 0;
+    void renderLog();
+  });
 }
 
 // ---------- log a climb ----------
