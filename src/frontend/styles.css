@@ -1232,6 +1232,43 @@ input[type='radio'] {
   flex-shrink: 0;
 }
 
+.log-day {
+  margin-top: 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--chalk-dim);
+}
+
+.log-day:first-of-type {
+  margin-top: 0;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.pager-status {
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--chalk-dim);
+}
+
+.pager button[disabled] {
+  opacity: 0.4;
+}
+
 .attempt-result.is-send {
   color: var(--green);
 }

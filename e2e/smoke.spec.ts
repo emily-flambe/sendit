@@ -64,3 +64,66 @@ test('climb-type toggle only shows for roped climbs on the log form', async ({ p
   await expect(page.locator('select[name=route]')).not.toHaveValue('__new');
   await expect(seg).toBeHidden();
 });
+
+test('log groups entries by day and paginates on day boundaries', async ({ page }) => {
+  const username = `e2e_${Date.now()}_pages`;
+
+  await page.goto('/');
+  await page.fill('input[name=username]', username);
+  await page.fill('input[name=password]', 'password123');
+  await page.click('button[data-mode=register]');
+
+  await page.fill('#gym-form input[name=name]', 'E2E Pager Gym');
+  await page.click('#gym-form button[type=submit]');
+  await expect(page).toHaveURL(/#\/routes$/);
+
+  // Seed via the API: 25 attempts on the newest day and 5 on an older one,
+  // so newest-first pagination closes page 1 exactly at the day boundary.
+  await page.evaluate(async () => {
+    const token = localStorage.getItem('sendit_token');
+    const call = async (method: string, path: string, body: unknown) => {
+      const res = await fetch(`/api${path}`, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return res.json();
+    };
+    const { gyms } = await (
+      await fetch('/api/gyms', { headers: { Authorization: `Bearer ${token}` } })
+    ).json();
+    const { route } = await call('POST', `/gyms/${gyms[0].id}/routes`, {
+      name: 'pager boulder',
+      grade: 'V1',
+      color: 'blue',
+      wall: '',
+      discipline: 'boulder',
+      notes: '',
+    });
+    for (let i = 0; i < 25; i++) {
+      await call('POST', `/routes/${route.id}/attempts`, { attempted_on: '2026-07-19', result: 'attempt' });
+    }
+    for (let i = 0; i < 5; i++) {
+      await call('POST', `/routes/${route.id}/attempts`, { attempted_on: '2026-07-18', result: 'attempt' });
+    }
+  });
+
+  await page.click('nav a[href="#/"]');
+
+  // Page 1: only the newest day, with one day heading and all 25 entries.
+  await expect(page.locator('.pager-status')).toHaveText('Page 1 of 2');
+  await expect(page.locator('.log-day')).toHaveCount(1);
+  await expect(page.locator('.log-day')).toContainText('2026-07-19');
+  await expect(page.locator('.log-entry')).toHaveCount(25);
+
+  // Page 2: the older day only.
+  await page.click('.pager button[data-page=next]');
+  await expect(page.locator('.pager-status')).toHaveText('Page 2 of 2');
+  await expect(page.locator('.log-day')).toContainText('2026-07-18');
+  await expect(page.locator('.log-entry')).toHaveCount(5);
+
+  // Changing a filter snaps back to the first page.
+  await page.selectOption('.filter-bar select[data-f=status]', 'attempt');
+  await expect(page.locator('.pager-status')).toHaveText('Page 1 of 2');
+});
