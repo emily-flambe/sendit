@@ -22,6 +22,12 @@ import {
 import { detectHolds } from './detect';
 import { paginateByDay, chunk } from './log-pages';
 import { markerFromPolygon } from '../markers';
+import {
+  MAX_DRAWING_ITEMS,
+  MAX_POLYGON_POINTS,
+  MAX_ROUTE_IMAGE_MARKERS,
+  MAX_STROKE_POINTS,
+} from '../limits';
 
 const GYM_KEY = 'sendit_gym';
 
@@ -287,8 +293,6 @@ function openLightbox(photo: Photo, routeId: string, onChange: () => void): void
 // ---------- route image (annotated topo) ----------
 
 const DEFAULT_MARKER_R = 0.02;
-const MAX_MARKERS = 100; // mirrors the API's per-image marker cap
-const MAX_POLY_POINTS = 80; // mirrors the API's per-polygon vertex cap
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 function svgEl<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string>): SVGElementTagNameMap[K] {
@@ -542,8 +546,6 @@ function drawMarkers(svg: SVGSVGElement, markers: RouteMarker[], w: number, h: n
 const DRAW_PALETTE = ['#ffffff', '#111111', '#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#ff2d95'] as const;
 const DEFAULT_STROKE_WIDTH = 0.008; // fraction of image width
 const TEXT_SIZE = 0.05; // fixed, fraction of image width
-const MAX_DRAWINGS = 200; // mirrors the API cap
-const MAX_STROKE_POINTS = 500; // mirrors the API's per-stroke point cap
 
 // Freehand strokes + text labels, on top of everything. All natural-pixel
 // units so it survives resize/zoom the same way markers do.
@@ -1151,8 +1153,8 @@ function openRouteImageEditor(
 
   // Closing a shape stays in draw mode so several holds can be outlined in a row.
   function closeTrace(): void {
-    if (trace.length >= 3 && markers.length < MAX_MARKERS) {
-      markers.push(markerFromPolygon(trace.slice(0, MAX_POLY_POINTS)));
+    if (trace.length >= 3 && markers.length < MAX_ROUTE_IMAGE_MARKERS) {
+      markers.push(markerFromPolygon(trace.slice(0, MAX_POLYGON_POINTS)));
     }
     trace = [];
     sync();
@@ -1220,7 +1222,7 @@ function openRouteImageEditor(
             return;
           }
         }
-        if (trace.length < MAX_POLY_POINTS) {
+        if (trace.length < MAX_POLYGON_POINTS) {
           trace.push([Math.min(1, Math.max(0, nx)), Math.min(1, Math.max(0, ny))]);
         }
         sync();
@@ -1238,7 +1240,7 @@ function openRouteImageEditor(
           return;
         }
       }
-      if (markers.length >= MAX_MARKERS) return;
+      if (markers.length >= MAX_ROUTE_IMAGE_MARKERS) return;
       markers.push({ x: Math.min(1, Math.max(0, nx)), y: Math.min(1, Math.max(0, ny)), r: tapR });
       sync();
     },
@@ -1258,7 +1260,7 @@ function openRouteImageEditor(
         sync();
       },
       commit: () => {
-        if (stroke.length >= 2 && drawings.length < MAX_DRAWINGS) {
+        if (stroke.length >= 2 && drawings.length < MAX_DRAWING_ITEMS) {
           drawings.push({ kind: 'stroke', color: drawColor, width: strokeWidth, points: stroke });
         }
         stroke = [];
@@ -1273,7 +1275,7 @@ function openRouteImageEditor(
 
   function commitText(): void {
     const text = textInput.value.trim();
-    if (pendingText && text && drawings.length < MAX_DRAWINGS) {
+    if (pendingText && text && drawings.length < MAX_DRAWING_ITEMS) {
       drawings.push({ kind: 'text', color: drawColor, size: TEXT_SIZE, x: pendingText.x, y: pendingText.y, text });
     }
     pendingText = null;
@@ -1354,7 +1356,7 @@ function openRouteImageEditor(
       const { markers: found, total } = await detectHolds(img, colorHex(color));
       let added = 0;
       for (const m of found) {
-        if (markers.length >= MAX_MARKERS) break;
+        if (markers.length >= MAX_ROUTE_IMAGE_MARKERS) break;
         // Skip a detection that lands on an existing marker so re-running is safe.
         const dup = markers.some((e) => Math.hypot(e.x - m.x, e.y - m.y) < Math.max(e.r, m.r));
         if (dup) continue;
@@ -1890,6 +1892,67 @@ function wireFilterBar(f: ListFilters, rerender: () => void): void {
   );
 }
 
+// ---------- route cards ----------
+
+// The log and the routes list render the same card: a color tape, the route
+// title with a status badge, stacked meta lines, a thumbnail, and the grade.
+interface CardOptions {
+  routeId: string;
+  cls?: string;
+  color: string;
+  title: string;
+  badge: string; // trusted markup, not user text
+  meta: { text: string; dim?: boolean }[];
+  grade: string;
+  thumb: { image_photo_id: string | null; first_photo_id: string | null };
+}
+
+function routeCard(o: CardOptions): string {
+  const meta = o.meta
+    .filter((m) => m.text)
+    .map((m) => `<span class="route-card-meta${m.dim ? ' dim' : ''}">${esc(m.text)}</span>`)
+    .join('');
+  return `<a class="route-card${o.cls ? ` ${o.cls}` : ''}" href="#/route/${esc(o.routeId)}">
+    <span class="tape" style="background:${colorHex(o.color)}"></span>
+    <span class="route-card-body">
+      <span class="route-card-top">
+        <strong>${esc(o.title)}</strong>
+        ${o.badge}
+      </span>
+      ${meta}
+    </span>
+    ${cardThumb(o.routeId, o.thumb)}
+    <span class="route-card-grade">${esc(o.grade)}</span>
+  </a>`;
+}
+
+// A route with an annotated image gets a placeholder that hydrateSpotlightThumbs
+// swaps for the spotlit crop; otherwise the first linked photo stands in.
+function cardThumb(routeId: string, src: { image_photo_id: string | null; first_photo_id: string | null }): string {
+  if (src.image_photo_id) return `<span class="card-thumb" data-spotlight-thumb="${esc(routeId)}"></span>`;
+  if (src.first_photo_id) return `<span class="card-thumb"><img data-photo="${esc(src.first_photo_id)}" alt="" /></span>`;
+  return '';
+}
+
+interface SpotlightSource {
+  image_photo_id: string | null;
+  image_markers: string | null;
+  image_photo_v: number | null;
+}
+
+function hydrateSpotlightThumbs<T extends SpotlightSource>(items: T[], routeIdOf: (item: T) => string): void {
+  document.querySelectorAll<HTMLSpanElement>('[data-spotlight-thumb]').forEach((el) => {
+    const item = items.find((i) => routeIdOf(i) === el.dataset.spotlightThumb);
+    if (!item?.image_photo_id || !item.image_markers) return;
+    try {
+      const markers = JSON.parse(item.image_markers) as RouteMarker[];
+      el.replaceWith(spotlightThumb(item.image_photo_id, item.image_photo_v ?? 0, markers));
+    } catch {
+      el.remove();
+    }
+  });
+}
+
 // ---------- chrome ----------
 
 function shell(content: string, nav: 'log' | 'routes' | 'photos' | 'gyms' | null): void {
@@ -2012,29 +2075,23 @@ async function renderLog(): Promise<void> {
           ? `<h3 class="log-day">${esc(e.attempted_on)} · ${esc(recency(e.attempted_on))}</h3>`
           : '';
       lastDay = e.attempted_on;
-      const meta = [e.gym_name, logTypeLabel(e)].filter(Boolean).join(' · ');
-      const detail = [e.high_point, e.notes].filter(Boolean).join(' — ');
-      // Same route thumbnail as the routes page: spotlit route image if there
-      // is one (swapped in below), else the route's first linked photo.
-      const thumb = e.image_photo_id
-        ? `<span class="card-thumb" data-spotlight-thumb="${esc(e.route_id)}"></span>`
-        : e.first_photo_id
-          ? `<span class="card-thumb"><img data-photo="${esc(e.first_photo_id)}" alt="" /></span>`
-          : '';
-      return `${dayHeading}<a class="route-card log-entry" href="#/route/${esc(e.route_id)}">
-        <span class="tape" style="background:${colorHex(e.route_color)}"></span>
-        <span class="route-card-body">
-          <span class="route-card-top">
-            <strong>${esc(routeTitle({ name: e.route_name, color: e.route_color, grade: e.route_grade }))}</strong>
-            <span class="attempt-result ${e.result === 'send' ? 'is-send' : ''}">${e.result === 'send' ? 'SENT' : 'attempt'}</span>
-          </span>
-          <span class="route-card-meta">${esc(meta)}</span>
-          ${grouped ? '' : `<span class="route-card-meta dim">${esc(e.attempted_on)} · ${esc(recency(e.attempted_on))}</span>`}
-          ${detail ? `<span class="route-card-meta">${esc(detail)}</span>` : ''}
-        </span>
-        ${thumb}
-        <span class="route-card-grade">${esc(e.route_grade)}</span>
-      </a>`;
+      // A day heading already carries the date, so the per-card date line is
+      // only needed when the entries aren't grouped.
+      const card = routeCard({
+        routeId: e.route_id,
+        cls: 'log-entry',
+        color: e.route_color,
+        title: routeTitle({ name: e.route_name, color: e.route_color, grade: e.route_grade }),
+        badge: `<span class="attempt-result ${e.result === 'send' ? 'is-send' : ''}">${e.result === 'send' ? 'SENT' : 'attempt'}</span>`,
+        meta: [
+          { text: [e.gym_name, logTypeLabel(e)].filter(Boolean).join(' · ') },
+          { text: grouped ? '' : `${e.attempted_on} · ${recency(e.attempted_on)}`, dim: true },
+          { text: [e.high_point, e.notes].filter(Boolean).join(' — ') },
+        ],
+        grade: e.route_grade,
+        thumb: e,
+      });
+      return `${dayHeading}${card}`;
     })
     .join('');
 
@@ -2071,16 +2128,7 @@ async function renderLog(): Promise<void> {
   );
 
   hydratePhotos();
-  document.querySelectorAll<HTMLSpanElement>('[data-spotlight-thumb]').forEach((el) => {
-    const e = visible.find((v) => v.route_id === el.dataset.spotlightThumb);
-    if (!e?.image_photo_id || !e.image_markers) return;
-    try {
-      const markers = JSON.parse(e.image_markers) as RouteMarker[];
-      el.replaceWith(spotlightThumb(e.image_photo_id, e.image_photo_v ?? 0, markers));
-    } catch {
-      el.remove();
-    }
-  });
+  hydrateSpotlightThumbs(visible, (e) => e.route_id);
 
   document.querySelectorAll<HTMLButtonElement>('.pager button').forEach((btn) =>
     btn.addEventListener('click', () => {
@@ -2348,30 +2396,23 @@ async function renderRoutes(): Promise<void> {
   const cards = visible
     .map((r) => {
       const state = routeState(r);
-      const meta = [r.gym_name, r.wall, DISCIPLINE_LABELS[r.discipline]].filter(Boolean).join(' · ');
-      const last = r.last_attempted_on
-        ? `${r.attempt_count} ${r.attempt_count === 1 ? 'try' : 'tries'} · last ${recency(r.last_attempted_on)}`
-        : 'not tried yet';
-      // Routes with a route image get a spotlit thumbnail (swapped in below);
-      // others fall back to their first photo.
-      const thumb = r.image_photo_id
-        ? `<span class="card-thumb" data-spotlight-thumb="${esc(r.id)}"></span>`
-        : r.first_photo_id
-          ? `<span class="card-thumb"><img data-photo="${esc(r.first_photo_id)}" alt="" /></span>`
-          : '';
-      return `<a class="route-card" href="#/route/${esc(r.id)}">
-        <span class="tape" style="background:${colorHex(r.color)}"></span>
-        <span class="route-card-body">
-          <span class="route-card-top">
-            <strong>${esc(routeTitle(r))}</strong>
-            <span class="state state-${state}">${STATE_LABELS[state]}</span>
-          </span>
-          <span class="route-card-meta">${esc(meta)}</span>
-          <span class="route-card-meta dim">${esc(last)}</span>
-        </span>
-        ${thumb}
-        <span class="route-card-grade">${esc(r.grade)}</span>
-      </a>`;
+      return routeCard({
+        routeId: r.id,
+        color: r.color,
+        title: routeTitle(r),
+        badge: `<span class="state state-${state}">${STATE_LABELS[state]}</span>`,
+        meta: [
+          { text: [r.gym_name, r.wall, DISCIPLINE_LABELS[r.discipline]].filter(Boolean).join(' · ') },
+          {
+            text: r.last_attempted_on
+              ? `${r.attempt_count} ${r.attempt_count === 1 ? 'try' : 'tries'} · last ${recency(r.last_attempted_on)}`
+              : 'not tried yet',
+            dim: true,
+          },
+        ],
+        grade: r.grade,
+        thumb: r,
+      });
     })
     .join('');
 
@@ -2410,16 +2451,7 @@ async function renderRoutes(): Promise<void> {
   );
 
   hydratePhotos();
-  document.querySelectorAll<HTMLSpanElement>('[data-spotlight-thumb]').forEach((el) => {
-    const r = visible.find((v) => v.id === el.dataset.spotlightThumb);
-    if (!r?.image_photo_id || !r.image_markers) return;
-    try {
-      const markers = JSON.parse(r.image_markers) as RouteMarker[];
-      el.replaceWith(spotlightThumb(r.image_photo_id, r.image_photo_v ?? 0, markers));
-    } catch {
-      el.remove();
-    }
-  });
+  hydrateSpotlightThumbs(visible, (r) => r.id);
   wireFilterBar(f, () => void renderRoutes());
 }
 

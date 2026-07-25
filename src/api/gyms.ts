@@ -62,7 +62,7 @@ gyms.get('/:id/routes', async (c) => {
     return c.json({ error: 'Gym not found' }, 404);
   }
   const includeArchived = c.req.query('archived') === '1';
-  const routes = await queries.listRoutes(c.env.DB, c.get('userId'), gym.id, includeArchived);
+  const routes = await queries.listRoutes(c.env.DB, c.get('userId'), { gymId: gym.id, includeArchived });
   return c.json({ routes });
 });
 

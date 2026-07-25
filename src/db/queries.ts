@@ -2,15 +2,24 @@ import type {
   Attempt,
   Gym,
   LinkedRoute,
+  LogEntry,
   Photo,
   PhotoWithLinks,
   Route,
   DrawingItem,
   RouteImage,
   RouteMarker,
-  RouteWithStats,
+  RouteWithGym,
   User,
 } from '../types';
+
+// Thumbnail source for a route, shared by the route lists and the climb log:
+// the annotated route image if there is one (with its markers and photo version
+// so the client can render the spotlit crop), else the first linked photo.
+const THUMB_COLUMNS = `(SELECT l.photo_id FROM route_photo_links l WHERE l.route_id = r.id ORDER BY l.created_at LIMIT 1) AS first_photo_id,
+       (SELECT ri.photo_id FROM route_images ri WHERE ri.route_id = r.id) AS image_photo_id,
+       (SELECT ri.markers FROM route_images ri WHERE ri.route_id = r.id) AS image_markers,
+       (SELECT p.updated_at FROM route_images ri JOIN photos p ON p.id = ri.photo_id WHERE ri.route_id = r.id) AS image_photo_v`;
 
 interface UserRow extends User {
   password_hash: string;
@@ -86,33 +95,33 @@ export async function updateGym(
   return next;
 }
 
+// Route cards for the routes list, either across every gym or scoped to one.
 export async function listRoutes(
   db: D1Database,
   userId: string,
-  gymId: string,
-  includeArchived: boolean
-): Promise<RouteWithStats[]> {
-  const archivedClause = includeArchived ? '' : 'AND r.archived = 0';
+  opts: { gymId?: string; includeArchived: boolean }
+): Promise<RouteWithGym[]> {
+  const archivedClause = opts.includeArchived ? '' : 'AND r.archived = 0';
+  const gymClause = opts.gymId ? 'AND r.gym_id = ?' : '';
+  const binds = opts.gymId ? [userId, opts.gymId] : [userId];
   const result = await db
     .prepare(
       `SELECT r.*,
+              g.name AS gym_name,
               COUNT(a.id) AS attempt_count,
               COALESCE(SUM(a.result = 'send'), 0) AS send_count,
               MAX(a.attempted_on) AS last_attempted_on,
               (SELECT COUNT(*) FROM route_photo_links l WHERE l.route_id = r.id) AS photo_count,
-              (SELECT l.photo_id FROM route_photo_links l WHERE l.route_id = r.id ORDER BY l.created_at LIMIT 1) AS first_photo_id,
-              (SELECT ri.photo_id FROM route_images ri WHERE ri.route_id = r.id) AS image_photo_id,
-              (SELECT ri.markers FROM route_images ri WHERE ri.route_id = r.id) AS image_markers,
-              (SELECT p.updated_at FROM route_images ri JOIN photos p ON p.id = ri.photo_id WHERE ri.route_id = r.id) AS image_photo_v
+              ${THUMB_COLUMNS}
        FROM routes r
        JOIN gyms g ON g.id = r.gym_id
        LEFT JOIN attempts a ON a.route_id = r.id
-       WHERE r.gym_id = ? AND g.user_id = ? ${archivedClause}
+       WHERE g.user_id = ? ${gymClause} ${archivedClause}
        GROUP BY r.id
        ORDER BY r.created_at DESC`
     )
-    .bind(gymId, userId)
-    .all<RouteWithStats>();
+    .bind(...binds)
+    .all<RouteWithGym>();
   return result.results;
 }
 
@@ -519,51 +528,6 @@ export async function deleteRouteImage(db: D1Database, userId: string, routeId: 
   return true;
 }
 
-export async function listAllRoutes(
-  db: D1Database,
-  userId: string,
-  includeArchived: boolean
-): Promise<(RouteWithStats & { gym_name: string })[]> {
-  const archivedClause = includeArchived ? '' : 'AND r.archived = 0';
-  const result = await db
-    .prepare(
-      `SELECT r.*,
-              g.name AS gym_name,
-              COUNT(a.id) AS attempt_count,
-              COALESCE(SUM(a.result = 'send'), 0) AS send_count,
-              MAX(a.attempted_on) AS last_attempted_on,
-              (SELECT COUNT(*) FROM route_photo_links l WHERE l.route_id = r.id) AS photo_count,
-              (SELECT l.photo_id FROM route_photo_links l WHERE l.route_id = r.id ORDER BY l.created_at LIMIT 1) AS first_photo_id,
-              (SELECT ri.photo_id FROM route_images ri WHERE ri.route_id = r.id) AS image_photo_id,
-              (SELECT ri.markers FROM route_images ri WHERE ri.route_id = r.id) AS image_markers,
-              (SELECT p.updated_at FROM route_images ri JOIN photos p ON p.id = ri.photo_id WHERE ri.route_id = r.id) AS image_photo_v
-       FROM routes r
-       JOIN gyms g ON g.id = r.gym_id
-       LEFT JOIN attempts a ON a.route_id = r.id
-       WHERE g.user_id = ? ${archivedClause}
-       GROUP BY r.id
-       ORDER BY r.created_at DESC`
-    )
-    .bind(userId)
-    .all<RouteWithStats & { gym_name: string }>();
-  return result.results;
-}
-
-export interface LogEntry extends Attempt {
-  gym_id: string;
-  route_name: string;
-  route_grade: string;
-  route_color: string;
-  route_discipline: Route['discipline'];
-  gym_name: string;
-  // Route thumbnail: a spotlit route image if one exists, else the first
-  // linked photo. Mirrors the fields listAllRoutes exposes for route cards.
-  first_photo_id: string | null;
-  image_photo_id: string | null;
-  image_markers: string | null;
-  image_photo_v: number | null;
-}
-
 export async function listLog(db: D1Database, userId: string, limit = 100): Promise<LogEntry[]> {
   const result = await db
     .prepare(
@@ -574,10 +538,7 @@ export async function listLog(db: D1Database, userId: string, limit = 100): Prom
               r.discipline AS route_discipline,
               g.id AS gym_id,
               g.name AS gym_name,
-              (SELECT l.photo_id FROM route_photo_links l WHERE l.route_id = r.id ORDER BY l.created_at LIMIT 1) AS first_photo_id,
-              (SELECT ri.photo_id FROM route_images ri WHERE ri.route_id = r.id) AS image_photo_id,
-              (SELECT ri.markers FROM route_images ri WHERE ri.route_id = r.id) AS image_markers,
-              (SELECT p.updated_at FROM route_images ri JOIN photos p ON p.id = ri.photo_id WHERE ri.route_id = r.id) AS image_photo_v
+              ${THUMB_COLUMNS}
        FROM attempts a
        JOIN routes r ON r.id = a.route_id
        JOIN gyms g ON g.id = r.gym_id
