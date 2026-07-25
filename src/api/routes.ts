@@ -2,6 +2,12 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { Env } from '../env';
 import * as queries from '../db/queries';
+import {
+  MAX_DRAWING_ITEMS,
+  MAX_POLYGON_POINTS,
+  MAX_ROUTE_IMAGE_MARKERS,
+  MAX_STROKE_POINTS,
+} from '../limits';
 import { authMiddleware } from '../middleware/auth';
 import { MAX_PHOTOS_PER_ROUTE, photoR2Key, readPhotoUpload } from './photos';
 
@@ -18,10 +24,6 @@ const routePatchSchema = z.object({
 
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
 
-export const MAX_ROUTE_IMAGE_MARKERS = 100;
-export const MAX_DRAWING_ITEMS = 200;
-export const MAX_STROKE_POINTS = 500;
-
 // Markers are normalized to the image (x/y in [0,1], r as fraction of width).
 // An optional polygon (auto-detected hold outline) is a ring of [x, y] points.
 const markerSchema = z.object({
@@ -31,7 +33,7 @@ const markerSchema = z.object({
   polygon: z
     .array(z.tuple([z.number().min(0).max(1), z.number().min(0).max(1)]))
     .min(3)
-    .max(80)
+    .max(MAX_POLYGON_POINTS)
     .optional(),
 });
 
@@ -83,7 +85,7 @@ routes.use('*', authMiddleware);
 
 routes.get('/', async (c) => {
   const includeArchived = c.req.query('archived') === '1';
-  const result = await queries.listAllRoutes(c.env.DB, c.get('userId'), includeArchived);
+  const result = await queries.listRoutes(c.env.DB, c.get('userId'), { includeArchived });
   return c.json({ routes: result });
 });
 

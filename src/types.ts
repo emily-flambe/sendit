@@ -56,6 +56,25 @@ export interface RouteWithStats extends Route {
   image_photo_v: number | null;
 }
 
+export interface RouteWithGym extends RouteWithStats {
+  gym_name: string;
+}
+
+// One logged attempt joined to its route and gym, for the climb log. The
+// thumbnail fields mirror what RouteWithStats exposes for route cards.
+export interface LogEntry extends Attempt {
+  gym_id: string;
+  gym_name: string;
+  route_name: string;
+  route_grade: string;
+  route_color: string;
+  route_discipline: Discipline;
+  first_photo_id: string | null;
+  image_photo_id: string | null;
+  image_markers: string | null;
+  image_photo_v: number | null;
+}
+
 // Gallery photo: owned by a user, optionally tagged with a gym, linked to
 // any number of routes via route_photo_links.
 export interface Photo {

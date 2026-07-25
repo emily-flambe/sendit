@@ -1,94 +1,45 @@
+// The API returns these row shapes verbatim, so the wire types are the worker's
+// types — declared once in src/types.ts and re-exported here for view code.
+import type {
+  Attempt,
+  AttemptResult,
+  ClimbType,
+  DrawingItem,
+  Gym,
+  LinkedRoute,
+  LogEntry,
+  Photo,
+  PhotoWithLinks,
+  Route,
+  RouteImage,
+  RouteMarker,
+  RouteWithGym,
+  RouteWithStats,
+  User,
+} from '../types';
+
+export type {
+  Attempt,
+  AttemptResult,
+  ClimbType,
+  Discipline,
+  DrawingItem,
+  DrawingStroke,
+  DrawingText,
+  Gym,
+  LinkedRoute,
+  LogEntry,
+  Photo,
+  PhotoWithLinks,
+  Route,
+  RouteImage,
+  RouteMarker,
+  RouteWithGym,
+  RouteWithStats,
+  User,
+} from '../types';
+
 const TOKEN_KEY = 'sendit_token';
-
-export interface User {
-  id: string;
-  username: string;
-  created_at: number;
-}
-
-export interface Gym {
-  id: string;
-  name: string;
-  notes: string;
-  archived: number;
-  created_at: number;
-}
-
-export type Discipline = 'boulder' | 'route';
-export type ClimbType = 'top_rope' | 'lead' | 'autobelay';
-export type AttemptResult = 'send' | 'attempt';
-
-export interface Route {
-  id: string;
-  gym_id: string;
-  name: string;
-  grade: string;
-  color: string;
-  wall: string;
-  discipline: Discipline;
-  notes: string;
-  archived: number;
-  created_at: number;
-  updated_at: number;
-}
-
-export interface RouteWithStats extends Route {
-  attempt_count: number;
-  send_count: number;
-  last_attempted_on: string | null;
-  photo_count: number;
-  first_photo_id: string | null;
-  image_photo_id: string | null;
-  image_markers: string | null; // markers JSON of the route image, for spotlit thumbnails
-  image_photo_v: number | null;
-}
-
-export interface RouteWithGym extends RouteWithStats {
-  gym_name: string;
-}
-
-export interface LogEntry {
-  id: string;
-  route_id: string;
-  gym_id: string;
-  attempted_on: string;
-  result: AttemptResult;
-  climb_type: ClimbType | '';
-  flashed: number;
-  high_point: string;
-  notes: string;
-  created_at: number;
-  route_name: string;
-  route_grade: string;
-  route_color: string;
-  route_discipline: Discipline;
-  gym_name: string;
-  first_photo_id: string | null;
-  image_photo_id: string | null;
-  image_markers: string | null;
-  image_photo_v: number | null;
-}
-
-export interface Photo {
-  id: string;
-  gym_id: string | null;
-  content_type: string;
-  size: number;
-  created_at: number;
-  updated_at: number;
-}
-
-export interface PhotoWithLinks extends Photo {
-  link_count: number;
-}
-
-export interface LinkedRoute {
-  route_id: string;
-  name: string;
-  grade: string;
-  color: string;
-  has_annotation: number;
-}
 
 // Client-side description of a crop/rotate edit, normalized like markers.
 export interface PhotoEdit {
@@ -96,51 +47,6 @@ export interface PhotoEdit {
   crop: { x: number; y: number; w: number; h: number };
   width: number;
   height: number;
-}
-
-export interface RouteMarker {
-  x: number;
-  y: number;
-  r: number;
-  polygon?: [number, number][];
-}
-
-export interface DrawingStroke {
-  kind: 'stroke';
-  color: string;
-  width: number;
-  points: [number, number][];
-}
-
-export interface DrawingText {
-  kind: 'text';
-  color: string;
-  size: number;
-  x: number;
-  y: number;
-  text: string;
-}
-
-export type DrawingItem = DrawingStroke | DrawingText;
-
-export interface RouteImage {
-  route_id: string;
-  photo_id: string;
-  markers: RouteMarker[];
-  drawings: DrawingItem[];
-  updated_at: number;
-}
-
-export interface Attempt {
-  id: string;
-  route_id: string;
-  attempted_on: string;
-  result: AttemptResult;
-  climb_type: ClimbType | '';
-  flashed: number;
-  high_point: string;
-  notes: string;
-  created_at: number;
 }
 
 export function getToken(): string | null {
