@@ -1,5 +1,6 @@
 import type {
   Attempt,
+  CatalogEntryWithImport,
   Gym,
   LinkedRoute,
   LogEntry,
@@ -70,6 +71,8 @@ export async function createGym(db: D1Database, userId: string, name: string, no
     notes,
     archived: 0,
     created_at: Date.now(),
+    catalog_source: '',
+    catalog_gym_id: '',
   };
   await db
     .prepare('INSERT INTO gyms (id, user_id, name, notes, archived, created_at) VALUES (?, ?, ?, ?, 0, ?)')
@@ -82,17 +85,89 @@ export async function updateGym(
   db: D1Database,
   userId: string,
   gymId: string,
-  fields: { name?: string; notes?: string; archived?: number }
+  fields: {
+    name?: string;
+    notes?: string;
+    archived?: number;
+    catalog_source?: string;
+    catalog_gym_id?: string;
+  }
 ): Promise<Gym | null> {
   const existing = await getGym(db, userId, gymId);
   if (!existing) return null;
 
   const next = { ...existing, ...fields };
   await db
-    .prepare('UPDATE gyms SET name = ?, notes = ?, archived = ? WHERE id = ? AND user_id = ?')
-    .bind(next.name, next.notes, next.archived, gymId, userId)
+    .prepare(
+      `UPDATE gyms SET name = ?, notes = ?, archived = ?, catalog_source = ?, catalog_gym_id = ?
+       WHERE id = ? AND user_id = ?`
+    )
+    .bind(next.name, next.notes, next.archived, next.catalog_source, next.catalog_gym_id, gymId, userId)
     .run();
   return next;
+}
+
+// ---------- gym catalog ----------
+
+// Every climb the gym's linked catalog currently lists, newest set first, each
+// annotated with the user's route if they already imported it. Climbs the sync
+// stopped seeing (removed_at set) are excluded unless asked for.
+export async function listGymCatalog(
+  db: D1Database,
+  gym: Gym,
+  opts: { includeRemoved?: boolean } = {}
+): Promise<CatalogEntryWithImport[]> {
+  if (!gym.catalog_source || !gym.catalog_gym_id) return [];
+  const removedClause = opts.includeRemoved ? '' : 'AND c.removed_at IS NULL';
+  const result = await db
+    .prepare(
+      `SELECT c.*,
+              (SELECT r.id FROM routes r
+                WHERE r.gym_id = ? AND r.source = c.source AND r.source_external_id = c.external_id
+                LIMIT 1) AS imported_route_id
+       FROM gym_catalog c
+       WHERE c.source = ? AND c.source_gym_id = ? ${removedClause}
+       ORDER BY c.wall, c.first_seen_at DESC`
+    )
+    .bind(gym.id, gym.catalog_source, gym.catalog_gym_id)
+    .all<CatalogEntryWithImport>();
+  return result.results;
+}
+
+// Copies catalog entries into the user's routes. Entries already imported into
+// this gym are skipped rather than duplicated, so re-running is harmless.
+// `name` is left empty on purpose: gym climbs have no names, and the client
+// composes a label from wall + grade + color.
+export async function importCatalogEntries(
+  db: D1Database,
+  gym: Gym,
+  catalogIds: string[]
+): Promise<{ routes: Route[]; skipped: string[] }> {
+  const entries = await listGymCatalog(db, gym, { includeRemoved: true });
+  const wanted = new Set(catalogIds);
+  const routes: Route[] = [];
+  const skipped: string[] = [];
+
+  for (const entry of entries) {
+    if (!wanted.has(entry.id)) continue;
+    if (entry.imported_route_id) {
+      skipped.push(entry.id);
+      continue;
+    }
+    routes.push(
+      await createRoute(db, gym.id, {
+        name: '',
+        grade: entry.grade,
+        color: entry.color,
+        wall: entry.wall,
+        discipline: entry.discipline,
+        notes: '',
+        source: entry.source,
+        source_external_id: entry.external_id,
+      })
+    );
+  }
+  return { routes, skipped };
 }
 
 // Route cards for the routes list, either across every gym or scoped to one.
@@ -143,6 +218,8 @@ export interface RouteInput {
   wall: string;
   discipline: Route['discipline'];
   notes: string;
+  source?: string;
+  source_external_id?: string;
 }
 
 export async function createRoute(db: D1Database, gymId: string, input: RouteInput): Promise<Route> {
@@ -151,14 +228,16 @@ export async function createRoute(db: D1Database, gymId: string, input: RouteInp
     id: crypto.randomUUID(),
     gym_id: gymId,
     ...input,
+    source: input.source ?? '',
+    source_external_id: input.source_external_id ?? '',
     archived: 0,
     created_at: now,
     updated_at: now,
   };
   await db
     .prepare(
-      `INSERT INTO routes (id, gym_id, name, grade, color, wall, discipline, notes, archived, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`
+      `INSERT INTO routes (id, gym_id, name, grade, color, wall, discipline, notes, archived, created_at, updated_at, source, source_external_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`
     )
     .bind(
       route.id,
@@ -170,7 +249,9 @@ export async function createRoute(db: D1Database, gymId: string, input: RouteInp
       route.discipline,
       route.notes,
       route.created_at,
-      route.updated_at
+      route.updated_at,
+      route.source,
+      route.source_external_id
     )
     .run();
   return route;

@@ -17,6 +17,10 @@ export interface Gym {
   notes: string;
   archived: number;
   created_at: number;
+  // Which external catalog this gym mirrors, e.g. 'kaya' + '211'. Both empty
+  // when the gym has no catalog, which is the default.
+  catalog_source: string;
+  catalog_gym_id: string;
 }
 
 export interface Route {
@@ -31,6 +35,34 @@ export interface Route {
   archived: number;
   created_at: number;
   updated_at: number;
+  // Provenance when the route came from a catalog import; '' when hand-entered.
+  source: string;
+  source_external_id: string;
+}
+
+// One climb the gym currently has set, as reported by an external platform.
+// Gym climbs are typically unnamed, so grade + color + wall is the identity.
+export interface CatalogEntry {
+  id: string;
+  source: string;
+  source_gym_id: string;
+  external_id: string;
+  slug: string;
+  grade: string;
+  color: string;
+  wall: string;
+  discipline: Discipline;
+  rating: number | null;
+  ascent_count: number;
+  is_closed: number;
+  first_seen_at: number;
+  last_seen_at: number;
+  removed_at: number | null;
+}
+
+// A catalog entry annotated with whether this user already imported it.
+export interface CatalogEntryWithImport extends CatalogEntry {
+  imported_route_id: string | null;
 }
 
 export interface Attempt {
