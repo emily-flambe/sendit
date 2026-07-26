@@ -19,22 +19,24 @@ npx wrangler d1 execute sendit-db --remote --yes --file=catalog.sql
 
 Trigger the workflow ad hoc from the Actions tab; the `gym` input takes a KAYA gym slug.
 
-## Linking a gym
+## Linking a gym and importing
 
-A gym shows no catalog until it points at one. Set both fields on the gym:
+A gym shows no catalog until it points at one. On the **Gyms** screen, each unlinked gym offers a "link a route catalog…" picker listing whatever the sync has data for (`GET /api/catalogs`); choosing one sets `catalog_source` + `catalog_gym_id` and drops you straight into the import screen. Linked gyms get an "import routes" link and an "unlink" button — unlinking only clears the pointer, so routes already imported stay put.
+
+The import screen groups the current inventory by wall, with a per-wall "select all" toggle. Entries already imported stay listed as checked and locked rather than vanishing, so the list keeps mirroring the wall in front of you. Importing creates one route per selected entry; importing something twice is a no-op.
+
+`catalog_gym_id` is KAYA's numeric gym id (`211` for Movement Boulder), which `scripts/kaya-sync.mjs` logs on every run. The same pointer can be set over the API directly:
 
 ```bash
 curl -X PATCH .../api/gyms/<gym-id> -H 'Authorization: Bearer <token>' \
   -d '{"catalog_source":"kaya","catalog_gym_id":"211"}'
 ```
 
-`catalog_gym_id` is KAYA's numeric gym id (`211` for Movement Boulder), which `scripts/kaya-sync.mjs` logs on every run. Setting both to `""` unlinks the gym.
-
 ## What the data looks like
 
 Gym climbs on KAYA have **no names** — Movement doesn't name them. Identity is grade + colour + wall, so imported routes are created with `name = ''` and the client composes a label from those three fields. The wall labels match the signs in the gym (`B4 - The Cave`, `Grey Wall`, `South Horseshoe`).
 
-Per climb the catalog stores grade, colour, wall, discipline, KAYA's community `rating` and `ascent_count`, plus `first_seen_at` / `last_seen_at`. A climb the sync stops seeing gets `removed_at` set rather than deleted, so a route you already imported keeps its provenance after the set is stripped. Stripped entries are hidden from `GET /api/gyms/:id/catalog` unless you pass `?removed=1`.
+Per climb the catalog stores grade, colour, wall, discipline, KAYA's community `rating` and `ascent_count`, plus `first_seen_at` / `last_seen_at`. The gym's own display name is denormalized onto each row as `source_gym_name` so the catalog picker can label itself without a second source of gym metadata. A climb the sync stops seeing gets `removed_at` set rather than deleted, so a route you already imported keeps its provenance after the set is stripped. Stripped entries are hidden from `GET /api/gyms/:id/catalog` unless you pass `?removed=1`.
 
 Re-running is safe: entries upsert on `(source, external_id)`, and importing an entry twice skips it rather than creating a duplicate route.
 

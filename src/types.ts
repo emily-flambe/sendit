@@ -46,6 +46,7 @@ export interface CatalogEntry {
   id: string;
   source: string;
   source_gym_id: string;
+  source_gym_name: string;
   external_id: string;
   slug: string;
   grade: string;
@@ -63,6 +64,15 @@ export interface CatalogEntry {
 // A catalog entry annotated with whether this user already imported it.
 export interface CatalogEntryWithImport extends CatalogEntry {
   imported_route_id: string | null;
+}
+
+// One catalog a gym can be linked to, as offered by the catalog picker.
+export interface CatalogSource {
+  source: string;
+  source_gym_id: string;
+  source_gym_name: string;
+  climb_count: number;
+  last_synced_at: number;
 }
 
 export interface Attempt {
@@ -100,6 +110,7 @@ export interface LogEntry extends Attempt {
   route_name: string;
   route_grade: string;
   route_color: string;
+  route_wall: string;
   route_discipline: Discipline;
   first_photo_id: string | null;
   image_photo_id: string | null;
