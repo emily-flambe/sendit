@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS gyms (
   notes TEXT NOT NULL DEFAULT '',
   archived INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
+  catalog_source TEXT NOT NULL DEFAULT '',
+  catalog_gym_id TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -38,10 +40,13 @@ CREATE TABLE IF NOT EXISTS routes (
   archived INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT '',
+  source_external_id TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (gym_id) REFERENCES gyms(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_routes_gym ON routes(gym_id, archived);
+CREATE INDEX IF NOT EXISTS idx_routes_source ON routes(gym_id, source, source_external_id);
 
 CREATE TABLE IF NOT EXISTS attempts (
   id TEXT PRIMARY KEY,
@@ -96,6 +101,27 @@ CREATE TABLE IF NOT EXISTS route_images (
 );
 
 CREATE INDEX IF NOT EXISTS idx_route_images_photo ON route_images(photo_id);
+
+CREATE TABLE IF NOT EXISTS gym_catalog (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  source_gym_id TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  slug TEXT NOT NULL DEFAULT '',
+  grade TEXT NOT NULL DEFAULT '',
+  color TEXT NOT NULL DEFAULT '',
+  wall TEXT NOT NULL DEFAULT '',
+  discipline TEXT NOT NULL DEFAULT 'route' CHECK (discipline IN ('boulder', 'route')),
+  rating REAL,
+  ascent_count INTEGER NOT NULL DEFAULT 0,
+  is_closed INTEGER NOT NULL DEFAULT 0,
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  removed_at INTEGER
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_gym_catalog_external ON gym_catalog(source, external_id);
+CREATE INDEX IF NOT EXISTS idx_gym_catalog_gym ON gym_catalog(source, source_gym_id, removed_at);
 `;
 
 beforeAll(async () => {

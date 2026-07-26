@@ -928,3 +928,127 @@ describe('cross-gym listing and log feed', () => {
     expect(steal.status).toBe(404);
   });
 });
+
+// The workers pool isolates storage per test, so anything a test needs to
+// already exist is seeded in beforeAll; each test's own writes are rolled back.
+describe('gym catalog', () => {
+  let token: string;
+  let gymId: string;
+
+  // Stands in for what the KAYA sync writes: unnamed climbs identified by
+  // grade + color + wall.
+  async function seedCatalog(
+    rows: { external_id: string; grade: string; color: string; wall: string; discipline: string; removed?: boolean }[]
+  ) {
+    for (const r of rows) {
+      await env.DB.prepare(
+        `INSERT INTO gym_catalog (id, source, source_gym_id, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, removed_at)
+         VALUES (?, 'kaya', '211', ?, '', ?, ?, ?, ?, 4.5, 7, 0, 1, 1, ?)`
+      )
+        .bind(`kaya:${r.external_id}`, r.external_id, r.grade, r.color, r.wall, r.discipline, r.removed ? 2 : null)
+        .run();
+    }
+  }
+
+  beforeAll(async () => {
+    token = await registerUser('catalog-user');
+    gymId = (await call('POST', '/api/gyms', { name: 'Movement Boulder' }, token)).data.gym.id;
+    await call('PATCH', `/api/gyms/${gymId}`, { catalog_source: 'kaya', catalog_gym_id: '211' }, token);
+    await seedCatalog([
+      { external_id: 'c1', grade: 'v2', color: 'blue', wall: 'B4 - The Cave', discipline: 'boulder' },
+      { external_id: 'c2', grade: '5.11c', color: 'green', wall: 'Grey Wall', discipline: 'route' },
+      { external_id: 'c3', grade: 'v5', color: 'pink', wall: 'A2 - 45 Right', discipline: 'boulder', removed: true },
+    ]);
+  });
+
+  const catalogOf = async (gym: string, query = '') =>
+    (await call('GET', `/api/gyms/${gym}/catalog${query}`, undefined, token)).data.catalog as Json[];
+
+  it('lists the linked catalog and hides climbs that were stripped', async () => {
+    const live = await catalogOf(gymId);
+    expect(live).toHaveLength(2);
+    expect(live.map((e) => e.external_id).sort()).toEqual(['c1', 'c2']);
+    expect(live.every((e) => e.imported_route_id === null)).toBe(true);
+
+    const withRemoved = await catalogOf(gymId, '?removed=1');
+    expect(withRemoved).toHaveLength(3);
+  });
+
+  it('returns nothing for a gym with no catalog link', async () => {
+    const unlinked = (await call('POST', '/api/gyms', { name: 'Unlinked' }, token)).data.gym.id;
+    expect(await catalogOf(unlinked)).toEqual([]);
+  });
+
+  it('imports entries as unnamed routes carrying wall, grade and colour', async () => {
+    const boulder = (await catalogOf(gymId)).find((e) => e.external_id === 'c1')!;
+
+    const imported = await call('POST', `/api/gyms/${gymId}/catalog/import`, { catalog_ids: [boulder.id] }, token);
+    expect(imported.status).toBe(201);
+    expect(imported.data.routes).toHaveLength(1);
+
+    const route = imported.data.routes[0] as Json;
+    expect(route.name).toBe(''); // gym climbs are unnamed; the client builds a label
+    expect(route.grade).toBe('v2');
+    expect(route.color).toBe('blue');
+    expect(route.wall).toBe('B4 - The Cave');
+    expect(route.discipline).toBe('boulder');
+    expect(route.source).toBe('kaya');
+    expect(route.source_external_id).toBe('c1');
+
+    const entry = (await catalogOf(gymId)).find((e) => e.external_id === 'c1')!;
+    expect(entry.imported_route_id).toBe(route.id);
+  });
+
+  it('skips entries already imported instead of duplicating them', async () => {
+    const ids = (await catalogOf(gymId)).map((e) => e.id);
+
+    const first = await call('POST', `/api/gyms/${gymId}/catalog/import`, { catalog_ids: ids }, token);
+    expect(first.data.routes).toHaveLength(2);
+    expect(first.data.skipped).toEqual([]);
+
+    const second = await call('POST', `/api/gyms/${gymId}/catalog/import`, { catalog_ids: ids }, token);
+    expect(second.status).toBe(201);
+    expect(second.data.routes).toHaveLength(0);
+    expect(second.data.skipped).toHaveLength(2);
+
+    const routes = (await call('GET', `/api/gyms/${gymId}/routes`, undefined, token)).data.routes as Json[];
+    expect(routes.filter((r) => r.source === 'kaya')).toHaveLength(2);
+  });
+
+  it('imports a stripped climb only when explicitly asked for by id', async () => {
+    const removed = (await catalogOf(gymId, '?removed=1')).find((e) => e.external_id === 'c3')!;
+    const res = await call('POST', `/api/gyms/${gymId}/catalog/import`, { catalog_ids: [removed.id] }, token);
+    expect(res.status).toBe(201);
+    expect(res.data.routes).toHaveLength(1);
+    expect(res.data.routes[0].wall).toBe('A2 - 45 Right');
+  });
+
+  it('rejects an import into a gym with no catalog link', async () => {
+    const unlinked = (await call('POST', '/api/gyms', { name: 'Unlinked' }, token)).data.gym.id;
+    const res = await call('POST', `/api/gyms/${unlinked}/catalog/import`, { catalog_ids: ['kaya:c1'] }, token);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects an empty or oversized id list', async () => {
+    expect((await call('POST', `/api/gyms/${gymId}/catalog/import`, { catalog_ids: [] }, token)).status).toBe(400);
+    const tooMany = Array.from({ length: 501 }, (_, i) => `kaya:x${i}`);
+    expect((await call('POST', `/api/gyms/${gymId}/catalog/import`, { catalog_ids: tooMany }, token)).status).toBe(400);
+  });
+
+  it('ignores catalog ids belonging to a different gym', async () => {
+    await seedCatalog([{ external_id: 'other', grade: 'v9', color: 'red', wall: 'Elsewhere', discipline: 'boulder' }]);
+    await env.DB.prepare("UPDATE gym_catalog SET source_gym_id = '999' WHERE external_id = 'other'").run();
+
+    const res = await call('POST', `/api/gyms/${gymId}/catalog/import`, { catalog_ids: ['kaya:other'] }, token);
+    expect(res.status).toBe(201);
+    expect(res.data.routes).toEqual([]);
+  });
+
+  it('does not expose the catalog of a gym the caller does not own', async () => {
+    const stranger = await registerUser('catalog-snoop');
+    expect((await call('GET', `/api/gyms/${gymId}/catalog`, undefined, stranger)).status).toBe(404);
+    expect(
+      (await call('POST', `/api/gyms/${gymId}/catalog/import`, { catalog_ids: ['kaya:c2'] }, stranger)).status
+    ).toBe(404);
+  });
+});

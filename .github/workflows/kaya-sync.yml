@@ -1,0 +1,72 @@
+name: KAYA catalog sync
+
+# Refreshes gym_catalog from KAYA once a day. Runs in Actions rather than the
+# Worker because the pull needs a headless browser, which Workers can't run.
+on:
+  schedule:
+    # 02:00 UTC — evening in Colorado, after the day's setting is done.
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      gym:
+        description: KAYA gym slug
+        default: movementboulder
+        required: false
+
+concurrency:
+  group: kaya-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # Same graceful skip as the deploy jobs: no token, no write, but a visible warning.
+      - name: Check for Cloudflare token
+        id: creds
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::CLOUDFLARE_API_TOKEN secret is not set; skipping catalog sync."
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.creds.outputs.present == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.creds.outputs.present == 'true'
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.creds.outputs.present == 'true'
+        run: npm ci
+      - if: steps.creds.outputs.present == 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Pull catalog from KAYA
+        if: steps.creds.outputs.present == 'true'
+        # Via env, not ${{ }} inline, so the slug can't break out of the command.
+        env:
+          GYM_SLUG: ${{ inputs.gym || 'movementboulder' }}
+        run: node scripts/kaya-sync.mjs --gym "$GYM_SLUG" --sql catalog.sql --json catalog.json
+
+      - name: Apply to D1
+        if: steps.creds.outputs.present == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx wrangler d1 execute sendit-db --remote --yes --file=catalog.sql
+
+      # Kept so a bad sync can be diagnosed after the fact, and so the raw
+      # response is available when KAYA changes a field.
+      - name: Upload sync artifacts
+        if: steps.creds.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaya-catalog
+          path: |
+            catalog.sql
+            catalog.json
+          retention-days: 14
