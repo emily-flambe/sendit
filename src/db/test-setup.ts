@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS gym_catalog (
   id TEXT PRIMARY KEY,
   source TEXT NOT NULL,
   source_gym_id TEXT NOT NULL,
+  source_gym_name TEXT NOT NULL DEFAULT '',
   external_id TEXT NOT NULL,
   slug TEXT NOT NULL DEFAULT '',
   grade TEXT NOT NULL DEFAULT '',

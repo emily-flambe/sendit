@@ -3,6 +3,8 @@
 import type {
   Attempt,
   AttemptResult,
+  CatalogEntryWithImport,
+  CatalogSource,
   ClimbType,
   DrawingItem,
   Gym,
@@ -21,6 +23,8 @@ import type {
 export type {
   Attempt,
   AttemptResult,
+  CatalogEntryWithImport,
+  CatalogSource,
   ClimbType,
   Discipline,
   DrawingItem,
@@ -103,8 +107,18 @@ export const api = {
   listGyms: (includeArchived = false) =>
     request<{ gyms: Gym[] }>('GET', `/gyms${includeArchived ? '?archived=1' : ''}`),
   createGym: (name: string, notes = '') => request<{ gym: Gym }>('POST', '/gyms', { name, notes }),
-  updateGym: (id: string, fields: Partial<Pick<Gym, 'name' | 'notes' | 'archived'>>) =>
-    request<{ gym: Gym }>('PATCH', `/gyms/${id}`, fields),
+  updateGym: (
+    id: string,
+    fields: Partial<Pick<Gym, 'name' | 'notes' | 'archived' | 'catalog_source' | 'catalog_gym_id'>>
+  ) => request<{ gym: Gym }>('PATCH', `/gyms/${id}`, fields),
+
+  listCatalogSources: () => request<{ sources: CatalogSource[] }>('GET', '/catalogs'),
+  listGymCatalog: (gymId: string) =>
+    request<{ catalog: CatalogEntryWithImport[] }>('GET', `/gyms/${gymId}/catalog`),
+  importCatalog: (gymId: string, catalogIds: string[]) =>
+    request<{ routes: Route[]; skipped: string[] }>('POST', `/gyms/${gymId}/catalog/import`, {
+      catalog_ids: catalogIds,
+    }),
 
   listRoutes: (gymId: string, includeArchived = false) =>
     request<{ routes: RouteWithStats[] }>('GET', `/gyms/${gymId}/routes${includeArchived ? '?archived=1' : ''}`),

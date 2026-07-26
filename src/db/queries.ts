@@ -1,6 +1,7 @@
 import type {
   Attempt,
   CatalogEntryWithImport,
+  CatalogSource,
   Gym,
   LinkedRoute,
   LogEntry,
@@ -108,6 +109,22 @@ export async function updateGym(
 }
 
 // ---------- gym catalog ----------
+
+// Catalogs the sync has populated, for the "link this gym" picker. Not
+// user-scoped: catalogs describe public gyms, not anyone's own data.
+export async function listCatalogSources(db: D1Database): Promise<CatalogSource[]> {
+  const result = await db
+    .prepare(
+      `SELECT source, source_gym_id, MAX(source_gym_name) AS source_gym_name,
+              COUNT(*) AS climb_count, MAX(last_seen_at) AS last_synced_at
+       FROM gym_catalog
+       WHERE removed_at IS NULL
+       GROUP BY source, source_gym_id
+       ORDER BY source_gym_name`
+    )
+    .all<CatalogSource>();
+  return result.results;
+}
 
 // Every climb the gym's linked catalog currently lists, newest set first, each
 // annotated with the user's route if they already imported it. Climbs the sync
@@ -616,6 +633,7 @@ export async function listLog(db: D1Database, userId: string, limit = 100): Prom
               r.name AS route_name,
               r.grade AS route_grade,
               r.color AS route_color,
+              r.wall AS route_wall,
               r.discipline AS route_discipline,
               g.id AS gym_id,
               g.name AS gym_name,

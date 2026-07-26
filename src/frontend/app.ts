@@ -4,6 +4,8 @@ import {
   getToken,
   setToken,
   type Attempt,
+  type CatalogEntryWithImport,
+  type CatalogSource,
   type ClimbType,
   type Discipline,
   type Gym,
@@ -152,10 +154,13 @@ function routeState(r: { send_count: number; attempt_count: number }): RouteStat
   return 'new';
 }
 
-function routeTitle(r: { name: string; color: string; grade: string }): string {
+// Catalog-imported climbs have no name — gyms like Movement don't name their
+// boulders — so the wall is what tells a dozen same-colour V2s apart. A named
+// route keeps its wall in the meta line instead, so the wall shows up once.
+function routeTitle(r: { name: string; color: string; grade: string; wall?: string }): string {
   if (r.name) return r.name;
   const bits = [r.color, r.grade].filter(Boolean).join(' ');
-  return bits || 'Unnamed route';
+  return [bits, r.wall].filter(Boolean).join(' · ') || 'Unnamed route';
 }
 
 // Rank grades so mixed freetext sorts sensibly: V-scale together, YDS
@@ -2081,7 +2086,12 @@ async function renderLog(): Promise<void> {
         routeId: e.route_id,
         cls: 'log-entry',
         color: e.route_color,
-        title: routeTitle({ name: e.route_name, color: e.route_color, grade: e.route_grade }),
+        title: routeTitle({
+          name: e.route_name,
+          color: e.route_color,
+          grade: e.route_grade,
+          wall: e.route_wall,
+        }),
         badge: `<span class="attempt-result ${e.result === 'send' ? 'is-send' : ''}">${e.result === 'send' ? 'SENT' : 'attempt'}</span>`,
         meta: [
           { text: [e.gym_name, logTypeLabel(e)].filter(Boolean).join(' · ') },
@@ -2402,7 +2412,12 @@ async function renderRoutes(): Promise<void> {
         title: routeTitle(r),
         badge: `<span class="state state-${state}">${STATE_LABELS[state]}</span>`,
         meta: [
-          { text: [r.gym_name, r.wall, DISCIPLINE_LABELS[r.discipline]].filter(Boolean).join(' · ') },
+          {
+            // routeTitle already carries the wall when the route is unnamed.
+            text: [r.gym_name, r.name ? r.wall : '', DISCIPLINE_LABELS[r.discipline]]
+              .filter(Boolean)
+              .join(' · '),
+          },
           {
             text: r.last_attempted_on
               ? `${r.attempt_count} ${r.attempt_count === 1 ? 'try' : 'tries'} · last ${recency(r.last_attempted_on)}`
@@ -2893,13 +2908,165 @@ async function renderRouteDetail(routeId: string): Promise<void> {
 
 // ---------- gyms ----------
 
-async function renderGyms(): Promise<void> {
+// Browse the gym's synced catalog and copy chosen climbs into your own routes.
+// Entries are grouped by wall because that's how you find them in the building,
+// and already-imported ones stay visible (checked and locked) so the list still
+// mirrors the wall rather than silently shrinking.
+async function renderCatalogImport(gymId: string): Promise<void> {
+  const gym = gyms.find((g) => g.id === gymId);
+  if (!gym) {
+    window.location.hash = '#/gyms';
+    return;
+  }
+
+  let catalog: CatalogEntryWithImport[];
   try {
-    gyms = (await api.listGyms()).gyms;
+    catalog = (await api.listGymCatalog(gymId)).catalog;
   } catch (err) {
     fail(err);
     return;
   }
+
+  const walls = [...new Set(catalog.map((e) => e.wall || 'Unsorted'))];
+  const pending = catalog.filter((e) => !e.imported_route_id);
+
+  const wallSections = walls
+    .map((wall) => {
+      const entries = catalog.filter((e) => (e.wall || 'Unsorted') === wall);
+      const rows = entries
+        .map((e) => {
+          const done = Boolean(e.imported_route_id);
+          const stars = e.rating ? `${e.rating.toFixed(1)}★` : '';
+          const tries = e.ascent_count ? `${e.ascent_count} sends` : '';
+          return `<li class="catalog-row${done ? ' done' : ''}">
+            <label>
+              <input type="checkbox" data-entry="${esc(e.id)}" ${done ? 'checked disabled' : ''} />
+              <span class="tape" style="background:${colorHex(e.color)}"></span>
+              <span class="catalog-row-body">
+                <strong>${esc(e.grade)}</strong>
+                <span class="catalog-row-meta">${esc([e.color, stars, tries].filter(Boolean).join(' · '))}</span>
+              </span>
+              ${done ? '<span class="state state-sent">added</span>' : ''}
+            </label>
+          </li>`;
+        })
+        .join('');
+      const remaining = entries.filter((e) => !e.imported_route_id).length;
+      return `<section class="catalog-wall">
+        <h3>
+          ${esc(wall)}
+          <button type="button" class="linkish" data-wall="${esc(wall)}" ${remaining === 0 ? 'hidden' : ''}>
+            select all
+          </button>
+        </h3>
+        <ul class="catalog-list">${rows}</ul>
+      </section>`;
+    })
+    .join('');
+
+  shell(
+    `<header class="masthead compact">
+      <a class="back" href="#/gyms">&larr;</a>
+      <h2>Import routes</h2>
+    </header>
+    <main class="list">
+      ${
+        catalog.length === 0
+          ? `<p class="empty">Nothing synced for ${esc(gym.name)} yet. The catalog refreshes daily.</p>`
+          : `<p class="hint catalog-summary">
+               ${catalog.length} climbs currently set · ${pending.length} not yet added
+             </p>
+             ${wallSections}`
+      }
+    </main>
+    ${
+      pending.length > 0
+        ? `<div class="catalog-actions">
+             <button class="btn primary wide" id="import-btn" disabled>Import selected</button>
+           </div>`
+        : ''
+    }`,
+    'gyms'
+  );
+
+  const boxes = () => [...document.querySelectorAll<HTMLInputElement>('[data-entry]:not(:disabled)')];
+  const importBtn = document.getElementById('import-btn') as HTMLButtonElement | null;
+
+  const syncButton = () => {
+    if (!importBtn) return;
+    const n = boxes().filter((b) => b.checked).length;
+    importBtn.disabled = n === 0;
+    importBtn.textContent = n === 0 ? 'Import selected' : `Import ${n} route${n === 1 ? '' : 's'}`;
+  };
+
+  boxes().forEach((b) => b.addEventListener('change', syncButton));
+
+  document.querySelectorAll<HTMLButtonElement>('[data-wall]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const wall = btn.dataset.wall!;
+      const ids = new Set(
+        catalog.filter((e) => (e.wall || 'Unsorted') === wall && !e.imported_route_id).map((e) => e.id)
+      );
+      const targets = boxes().filter((b) => ids.has(b.dataset.entry!));
+      // Second press clears, so the button toggles the whole wall.
+      const turnOn = targets.some((b) => !b.checked);
+      targets.forEach((b) => (b.checked = turnOn));
+      syncButton();
+    })
+  );
+
+  importBtn?.addEventListener('click', async () => {
+    const ids = boxes().filter((b) => b.checked).map((b) => b.dataset.entry!);
+    if (ids.length === 0) return;
+    importBtn.disabled = true;
+    importBtn.textContent = 'Importing…';
+    try {
+      const { routes } = await api.importCatalog(gymId, ids);
+      setActiveGym(gymId);
+      routeFilters.gym = gymId;
+      toast(`Imported ${routes.length} route${routes.length === 1 ? '' : 's'}`);
+      window.location.hash = '#/routes';
+    } catch (err) {
+      fail(err);
+      syncButton();
+    }
+  });
+}
+
+async function renderGyms(): Promise<void> {
+  let sources: CatalogSource[] = [];
+  try {
+    gyms = (await api.listGyms()).gyms;
+    sources = (await api.listCatalogSources()).sources;
+  } catch (err) {
+    fail(err);
+    return;
+  }
+
+  // A gym linked to a catalog gets an import link; an unlinked one gets a
+  // picker, but only if the sync has actually populated a catalog to offer.
+  const catalogControl = (g: Gym): string => {
+    if (g.catalog_source && g.catalog_gym_id) {
+      return `<span class="gym-catalog">
+        <a class="linkish" href="#/gym/${esc(g.id)}/import">import routes</a>
+        <button class="linkish dim" data-unlink="${esc(g.id)}">unlink</button>
+      </span>`;
+    }
+    if (sources.length === 0) return '';
+    return `<span class="gym-catalog">
+      <select class="catalog-pick" data-link="${esc(g.id)}">
+        <option value="">link a route catalog…</option>
+        ${sources
+          .map(
+            (s) =>
+              `<option value="${esc(`${s.source}:${s.source_gym_id}`)}">
+                 ${esc(s.source_gym_name || s.source_gym_id)} (${s.climb_count})
+               </option>`
+          )
+          .join('')}
+      </select>
+    </span>`;
+  };
 
   const items = gyms
     .map(
@@ -2909,6 +3076,7 @@ async function renderGyms(): Promise<void> {
           ${g.id === activeGymId ? '<span class="state state-sent">default</span>' : ''}
         </button>
         <button class="linkish" data-rename="${esc(g.id)}">rename</button>
+        ${catalogControl(g)}
       </li>`
     )
     .join('');
@@ -2931,6 +3099,31 @@ async function renderGyms(): Promise<void> {
       setActiveGym(btn.dataset.gym!);
       routeFilters.gym = btn.dataset.gym!;
       window.location.hash = '#/routes';
+    })
+  );
+
+  document.querySelectorAll<HTMLSelectElement>('[data-link]').forEach((sel) =>
+    sel.addEventListener('change', async () => {
+      if (!sel.value) return;
+      const [source, catalogGymId] = sel.value.split(':');
+      try {
+        await api.updateGym(sel.dataset.link!, { catalog_source: source, catalog_gym_id: catalogGymId });
+        window.location.hash = `#/gym/${sel.dataset.link}/import`;
+      } catch (err) {
+        fail(err);
+      }
+    })
+  );
+
+  document.querySelectorAll<HTMLButtonElement>('[data-unlink]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      try {
+        // Unlinking only drops the catalog pointer; routes already imported stay.
+        await api.updateGym(btn.dataset.unlink!, { catalog_source: '', catalog_gym_id: '' });
+        void renderGyms();
+      } catch (err) {
+        fail(err);
+      }
     })
   );
 
@@ -3000,6 +3193,7 @@ async function route(): Promise<void> {
   const editMatch = hash.match(/^#\/route\/([\w-]+)\/edit$/);
   const photoMatch = hash.match(/^#\/photo\/([\w-]+)$/);
   const newMatch = hash.match(/^#\/new(?:\?(.*))?$/);
+  const importMatch = hash.match(/^#\/gym\/([\w-]+)\/import$/);
 
   if (hash === '#/') {
     await renderLog();
@@ -3019,6 +3213,8 @@ async function route(): Promise<void> {
     await renderPhotoDetail(photoMatch[1]);
   } else if (hash === '#/gyms') {
     await renderGyms();
+  } else if (importMatch) {
+    await renderCatalogImport(importMatch[1]);
   } else {
     window.location.hash = '#/';
   }

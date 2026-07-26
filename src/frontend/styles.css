@@ -474,6 +474,118 @@ input[type='radio'] {
   color: var(--danger);
 }
 
+/* ---------- catalog import ---------- */
+
+.gym-catalog {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.linkish.dim {
+  color: var(--chalk-faint);
+  font-size: 13px;
+}
+
+.catalog-pick {
+  font-size: 13px;
+  max-width: 190px;
+}
+
+.catalog-summary {
+  margin: 0 0 4px;
+}
+
+.catalog-wall h3 {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 18px 0 6px;
+  font-size: 15px;
+  color: var(--chalk-dim);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 4px;
+}
+
+.catalog-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* The global label rule stacks its children in a column; these rows are
+   horizontal, so the direction has to be set back explicitly. */
+.catalog-row label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* Form inputs are width:100% globally, which a checkbox must opt out of. */
+.catalog-row input[type='checkbox'] {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin: 0;
+  accent-color: var(--chalk-dim);
+}
+
+/* The tape is a flex child here, not absolutely placed as it is on route
+   cards, so it needs its own height. */
+.catalog-row .tape {
+  height: 26px;
+}
+
+.catalog-row-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.catalog-row-meta {
+  font-size: 13px;
+  color: var(--chalk-dim);
+}
+
+.catalog-row.done label {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Offset by the same 84px the app shell reserves for the fixed bottom nav (as
+   .fab does), or the nav sits on top of the button and swallows its clicks. */
+.catalog-actions {
+  position: sticky;
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  padding: 10px 0;
+  background: linear-gradient(to top, var(--bg) 70%, transparent);
+}
+
+.catalog-actions .btn[disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The sticky bar overlays the tail of the list, so the last wall needs room
+   to scroll clear of it. */
+.catalog-wall:last-of-type {
+  padding-bottom: 64px;
+}
+
 /* ---------- route detail ---------- */
 
 .detail {

@@ -1052,3 +1052,56 @@ describe('gym catalog', () => {
     ).toBe(404);
   });
 });
+
+describe('catalog sources', () => {
+  let token: string;
+
+  beforeAll(async () => {
+    token = await registerUser('catalog-picker');
+    await env.DB.prepare(
+      `INSERT INTO gym_catalog (id, source, source_gym_id, source_gym_name, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, removed_at)
+       VALUES ('kaya:p1','kaya','211','Movement Boulder','p1','','v3','red','Grey Wall','boulder',4,2,0,1,5,NULL),
+              ('kaya:p2','kaya','211','Movement Boulder','p2','','v4','blue','Grey Wall','boulder',4,2,0,1,9,NULL),
+              ('kaya:p3','kaya','999','Somewhere Else','p3','','v1','pink','Slab','boulder',4,2,0,1,3,NULL),
+              ('kaya:p4','kaya','211','Movement Boulder','p4','','v9','black','Cave','boulder',4,2,0,1,4,7)`
+    ).run();
+  });
+
+  it('groups synced climbs by gym and ignores stripped ones', async () => {
+    const { status, data } = await call('GET', '/api/catalogs', undefined, token);
+    expect(status).toBe(200);
+
+    const sources = data.sources as Json[];
+    const boulder = sources.find((s) => s.source_gym_id === '211')!;
+    expect(boulder.source_gym_name).toBe('Movement Boulder');
+    expect(boulder.climb_count).toBe(2); // p4 is removed
+    expect(boulder.last_synced_at).toBe(9);
+    expect(sources.find((s) => s.source_gym_id === '999')!.climb_count).toBe(1);
+  });
+
+  it('needs auth', async () => {
+    expect((await call('GET', '/api/catalogs')).status).toBe(401);
+  });
+});
+
+describe('log entries expose the route wall', () => {
+  it('carries wall through to the log feed so unnamed climbs stay identifiable', async () => {
+    const token = await registerUser('wall-logger');
+    const gymId = (await call('POST', '/api/gyms', { name: 'Movement' }, token)).data.gym.id;
+    const route = await call(
+      'POST',
+      `/api/gyms/${gymId}/routes`,
+      { name: '', grade: 'v2', color: 'blue', wall: 'B4 - The Cave', discipline: 'boulder' },
+      token
+    );
+    await call(
+      'POST',
+      `/api/routes/${route.data.route.id}/attempts`,
+      { attempted_on: '2026-07-20', result: 'send' },
+      token
+    );
+
+    const log = await call('GET', '/api/attempts', undefined, token);
+    expect(log.data.entries[0].route_wall).toBe('B4 - The Cave');
+  });
+});
