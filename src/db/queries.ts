@@ -75,6 +75,8 @@ export async function createGym(db: D1Database, userId: string, name: string, no
     created_at: Date.now(),
     catalog_source: '',
     catalog_gym_id: '',
+    map_boulder_url: '',
+    map_route_url: '',
   };
   await db
     .prepare('INSERT INTO gyms (id, user_id, name, notes, archived, created_at) VALUES (?, ?, ?, ?, 0, ?)')
@@ -93,6 +95,8 @@ export async function updateGym(
     archived?: number;
     catalog_source?: string;
     catalog_gym_id?: string;
+    map_boulder_url?: string;
+    map_route_url?: string;
   }
 ): Promise<Gym | null> {
   const existing = await getGym(db, userId, gymId);
@@ -101,10 +105,21 @@ export async function updateGym(
   const next = { ...existing, ...fields };
   await db
     .prepare(
-      `UPDATE gyms SET name = ?, notes = ?, archived = ?, catalog_source = ?, catalog_gym_id = ?
+      `UPDATE gyms SET name = ?, notes = ?, archived = ?, catalog_source = ?, catalog_gym_id = ?,
+              map_boulder_url = ?, map_route_url = ?
        WHERE id = ? AND user_id = ?`
     )
-    .bind(next.name, next.notes, next.archived, next.catalog_source, next.catalog_gym_id, gymId, userId)
+    .bind(
+      next.name,
+      next.notes,
+      next.archived,
+      next.catalog_source,
+      next.catalog_gym_id,
+      next.map_boulder_url,
+      next.map_route_url,
+      gymId,
+      userId
+    )
     .run();
   return next;
 }
@@ -304,6 +319,8 @@ export interface RouteInput {
   notes: string;
   source?: string;
   source_external_id?: string;
+  map_x?: number | null;
+  map_y?: number | null;
 }
 
 export async function createRoute(db: D1Database, gymId: string, input: RouteInput): Promise<Route> {
@@ -314,14 +331,16 @@ export async function createRoute(db: D1Database, gymId: string, input: RouteInp
     ...input,
     source: input.source ?? '',
     source_external_id: input.source_external_id ?? '',
+    map_x: input.map_x ?? null,
+    map_y: input.map_y ?? null,
     archived: 0,
     created_at: now,
     updated_at: now,
   };
   await db
     .prepare(
-      `INSERT INTO routes (id, gym_id, name, grade, color, wall, discipline, notes, archived, created_at, updated_at, source, source_external_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`
+      `INSERT INTO routes (id, gym_id, name, grade, color, wall, discipline, notes, archived, created_at, updated_at, source, source_external_id, map_x, map_y)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`
     )
     .bind(
       route.id,
@@ -335,7 +354,9 @@ export async function createRoute(db: D1Database, gymId: string, input: RouteInp
       route.created_at,
       route.updated_at,
       route.source,
-      route.source_external_id
+      route.source_external_id,
+      route.map_x,
+      route.map_y
     )
     .run();
   return route;
@@ -355,7 +376,8 @@ export async function updateRoute(
   await db
     .prepare(
       `UPDATE routes
-       SET gym_id = ?, name = ?, grade = ?, color = ?, wall = ?, discipline = ?, notes = ?, archived = ?, updated_at = ?
+       SET gym_id = ?, name = ?, grade = ?, color = ?, wall = ?, discipline = ?, notes = ?, archived = ?,
+           map_x = ?, map_y = ?, updated_at = ?
        WHERE id = ?`
     )
     .bind(
@@ -367,6 +389,8 @@ export async function updateRoute(
       next.discipline,
       next.notes,
       next.archived,
+      next.map_x,
+      next.map_y,
       next.updated_at,
       routeId
     )

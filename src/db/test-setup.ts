@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS gyms (
   created_at INTEGER NOT NULL,
   catalog_source TEXT NOT NULL DEFAULT '',
   catalog_gym_id TEXT NOT NULL DEFAULT '',
+  map_boulder_url TEXT NOT NULL DEFAULT '',
+  map_route_url TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -42,6 +44,8 @@ CREATE TABLE IF NOT EXISTS routes (
   updated_at INTEGER NOT NULL,
   source TEXT NOT NULL DEFAULT '',
   source_external_id TEXT NOT NULL DEFAULT '',
+  map_x REAL,
+  map_y REAL,
   FOREIGN KEY (gym_id) REFERENCES gyms(id) ON DELETE CASCADE
 );
 

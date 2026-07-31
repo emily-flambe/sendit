@@ -18,6 +18,8 @@ const gymPatchSchema = z.object({
   // Link the gym to an external catalog, or clear it with empty strings.
   catalog_source: z.enum(['', 'kaya']).optional(),
   catalog_gym_id: z.string().trim().max(64).optional(),
+  map_boulder_url: z.string().trim().max(500).optional(),
+  map_route_url: z.string().trim().max(500).optional(),
 });
 
 const catalogImportSchema = z.object({
@@ -31,6 +33,8 @@ const routeSchema = z.object({
   wall: z.string().trim().max(120).default(''),
   discipline: z.enum(['boulder', 'route']).default('route'),
   notes: z.string().max(4000).default(''),
+  map_x: z.number().min(0).max(1).nullable().optional(),
+  map_y: z.number().min(0).max(1).nullable().optional(),
 });
 
 const gyms = new Hono<{ Bindings: Env }>();

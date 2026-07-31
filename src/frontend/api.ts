@@ -109,7 +109,12 @@ export const api = {
   createGym: (name: string, notes = '') => request<{ gym: Gym }>('POST', '/gyms', { name, notes }),
   updateGym: (
     id: string,
-    fields: Partial<Pick<Gym, 'name' | 'notes' | 'archived' | 'catalog_source' | 'catalog_gym_id'>>
+    fields: Partial<
+      Pick<
+        Gym,
+        'name' | 'notes' | 'archived' | 'catalog_source' | 'catalog_gym_id' | 'map_boulder_url' | 'map_route_url'
+      >
+    >
   ) => request<{ gym: Gym }>('PATCH', `/gyms/${id}`, fields),
 
   listCatalogSources: () => request<{ sources: CatalogSource[] }>('GET', '/catalogs'),

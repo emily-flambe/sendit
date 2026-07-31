@@ -1908,6 +1908,36 @@ function wireFilterBar(f: ListFilters, rerender: () => void): void {
   );
 }
 
+// ---------- gym floor map ----------
+
+// Which map image applies, given the gym and what kind of climb it is. Empty
+// when this gym has no map for that discipline, in which case nothing renders.
+function mapUrlFor(gym: Gym | undefined, discipline: Discipline): string {
+  if (!gym) return '';
+  return discipline === 'boulder' ? gym.map_boulder_url : gym.map_route_url;
+}
+
+// The map with an optional pin. `onPlace` makes it interactive; leaving it out
+// renders a read-only view.
+function mapFigure(url: string, color: string, pin: { x: number; y: number } | null, editable: boolean): string {
+  const dot = pin
+    ? `<span class="map-pin" style="left:${(pin.x * 100).toFixed(2)}%;top:${(pin.y * 100).toFixed(2)}%;background:${colorHex(color)}"></span>`
+    : '';
+  return `<div class="map-figure${editable ? ' editable' : ''}" id="map-figure">
+      <img src="${esc(url)}" alt="Gym floor map" />
+      ${dot}
+    </div>`;
+}
+
+// Converts a click to image-relative coordinates, clamped so a tap on the very
+// edge still lands inside the image.
+function pinFromEvent(figure: HTMLElement, e: MouseEvent): { x: number; y: number } {
+  const img = figure.querySelector('img')!;
+  const r = img.getBoundingClientRect();
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+  return { x: clamp((e.clientX - r.left) / r.width), y: clamp((e.clientY - r.top) / r.height) };
+}
+
 // ---------- route cards ----------
 
 // The log and the routes list render the same card: a color tape, the route
@@ -2544,6 +2574,7 @@ async function renderRouteForm(routeId: string | null, linkPhotoId: string | nul
         <label>Wall / area
           <input name="wall" placeholder="Overhang, slab wall, cave…" value="${esc(route?.wall ?? '')}" />
         </label>
+        <div id="map-slot"></div>
         <label>Name <span class="hint">(optional — we'll make one up if you don't)</span>
           <input name="name" value="${esc(route?.name ?? '')}" />
         </label>
@@ -2589,6 +2620,44 @@ async function renderRouteForm(routeId: string | null, linkPhotoId: string | nul
   renderGradeChips();
   disciplineSelect.addEventListener('change', renderGradeChips);
 
+  // Pin lives outside the form fields because it's set by tapping, not typing.
+  let pin: { x: number; y: number } | null =
+    route && route.map_x != null && route.map_y != null ? { x: route.map_x, y: route.map_y } : null;
+
+  const gymSelect = form.querySelector<HTMLSelectElement>('select[name=gym_id]')!;
+  const slot = document.getElementById('map-slot')!;
+
+  function drawMap(): void {
+    const gym = gyms.find((g) => g.id === gymSelect.value);
+    const url = mapUrlFor(gym, disciplineSelect.value as Discipline);
+    if (!url) {
+      slot.innerHTML = '';
+      return;
+    }
+    slot.innerHTML = `<div class="map-field">
+        <span class="map-label">Where on the map ${pin ? '<button type="button" class="linkish" id="map-clear">clear</button>' : '<span class="hint">tap to place</span>'}</span>
+        ${mapFigure(url, colorInput.value, pin, true)}
+      </div>`;
+
+    const figure = document.getElementById('map-figure')!;
+    figure.addEventListener('click', (e) => {
+      pin = pinFromEvent(figure, e as MouseEvent);
+      drawMap();
+    });
+    document.getElementById('map-clear')?.addEventListener('click', () => {
+      pin = null;
+      drawMap();
+    });
+  }
+
+  drawMap();
+  // The map depends on both, and the pin means nothing once either changes.
+  gymSelect.addEventListener('change', () => { pin = null; drawMap(); });
+  disciplineSelect.addEventListener('change', () => { pin = null; drawMap(); });
+  form.querySelectorAll<HTMLButtonElement>('.swatch').forEach((btn) =>
+    btn.addEventListener('click', () => drawMap())
+  );
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const data = new FormData(form);
@@ -2600,6 +2669,8 @@ async function renderRouteForm(routeId: string | null, linkPhotoId: string | nul
       wall: String(data.get('wall') ?? ''),
       discipline: String(data.get('discipline')) as Discipline,
       notes: String(data.get('notes') ?? ''),
+      map_x: pin ? pin.x : null,
+      map_y: pin ? pin.y : null,
     };
     try {
       if (routeId) {
@@ -2807,6 +2878,14 @@ async function renderRouteDetail(routeId: string): Promise<void> {
         </div>
         ${routeImage ? '<div id="ri-view"></div>' : '<button class="annot-create" id="ri-create">Create route image</button>'}
       </section>
+      ${(() => {
+        const url = mapUrlFor(gyms.find((g) => g.id === route.gym_id), route.discipline);
+        if (!url || route.map_x == null || route.map_y == null) return '';
+        return `<section class="route-map">
+          <h3>On the map</h3>
+          ${mapFigure(url, route.color, { x: route.map_x, y: route.map_y }, false)}
+        </section>`;
+      })()}
       <section class="kaya-link" id="kaya-link"></section>
       ${route.notes ? `<section class="route-notes"><h3>Notes</h3><p>${esc(route.notes)}</p></section>` : ''}
       <section class="log-actions" style="--route-color:${colorHex(route.color)}">

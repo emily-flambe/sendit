@@ -586,6 +586,65 @@ input[type='radio'] {
   padding-bottom: 64px;
 }
 
+/* ---------- gym floor map ---------- */
+
+.map-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.map-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--chalk-dim);
+}
+
+.map-figure {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  /* The maps are light-on-white artwork, so they need a light backdrop even in
+     this dark UI. */
+  background: #fff;
+  line-height: 0;
+}
+
+.map-figure.editable {
+  cursor: crosshair;
+}
+
+.map-figure img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.map-pin {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 45%);
+  pointer-events: none;
+}
+
+.route-map h3 {
+  font-size: 15px;
+  color: var(--chalk-dim);
+  margin: 0 0 6px;
+}
+
 /* ---------- kaya link picker ---------- */
 
 .kaya-options {

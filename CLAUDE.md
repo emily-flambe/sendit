@@ -6,6 +6,7 @@ Route tracker on a Cloudflare Worker (Hono + D1 + R2) serving a vanilla-TS Vite 
 
 - Deployment (CI/CD, previews, secrets): `docs/deployment.md`
 - KAYA route catalog sync: `docs/kaya-sync.md`
+- Gym floor maps and route pins: `docs/gym-maps.md`
 - Feature designs: `docs/plans/`
 
 ## Conventions
