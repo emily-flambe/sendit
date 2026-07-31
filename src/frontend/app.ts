@@ -2879,11 +2879,22 @@ async function renderRouteDetail(routeId: string): Promise<void> {
         ${routeImage ? '<div id="ri-view"></div>' : '<button class="annot-create" id="ri-create">Create route image</button>'}
       </section>
       ${(() => {
+        // Shown whenever the gym has a map, pinned or not: an unpinned route
+        // used to render nothing at all, so there was no way to discover that
+        // a pin could be placed without opening the edit form.
         const url = mapUrlFor(gyms.find((g) => g.id === route.gym_id), route.discipline);
-        if (!url || route.map_x == null || route.map_y == null) return '';
+        if (!url) return '';
+        const pinned = route.map_x != null && route.map_y != null;
         return `<section class="route-map">
-          <h3>On the map</h3>
-          ${mapFigure(url, route.color, { x: route.map_x, y: route.map_y }, false)}
+          <div class="section-head">
+            <h3>On the map</h3>
+            ${
+              pinned
+                ? '<button class="linkish danger" id="map-clear">Remove pin</button>'
+                : '<span class="hint">tap to place</span>'
+            }
+          </div>
+          ${mapFigure(url, route.color, pinned ? { x: route.map_x!, y: route.map_y! } : null, true)}
         </section>`;
       })()}
       <section class="kaya-link" id="kaya-link"></section>
@@ -2918,6 +2929,29 @@ async function renderRouteDetail(routeId: string): Promise<void> {
   const rerender = () => void renderRouteDetail(route.id);
 
   void renderKayaLink(route, rerender);
+
+  // Tapping the map on the detail page saves immediately — going through the
+  // edit form to move a dot is more friction than the action deserves.
+  const mapFig = document.getElementById('map-figure');
+  mapFig?.addEventListener('click', async (e) => {
+    const pin = pinFromEvent(mapFig, e as MouseEvent);
+    try {
+      await api.updateRoute(route.id, { map_x: pin.x, map_y: pin.y });
+      rerender();
+    } catch (err) {
+      fail(err);
+    }
+  });
+  document.getElementById('map-clear')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try {
+      await api.updateRoute(route.id, { map_x: null, map_y: null });
+      toast('Pin removed');
+      rerender();
+    } catch (err) {
+      fail(err);
+    }
+  });
   const photoVersion = (photoId: string) => photos.find((p) => p.id === photoId)?.updated_at ?? 0;
   const editImage = (photoId: string, initial: RouteMarker[], drawings: DrawingItem[] = []) =>
     openRouteImageEditor(route.id, photoId, photoVersion(photoId), initial, route.color, rerender, drawings);
