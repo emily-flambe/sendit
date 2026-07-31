@@ -2637,7 +2637,8 @@ async function renderRouteDetail(routeId: string): Promise<void> {
       return `<li class="attempt ${a.result}">
         <div class="attempt-line">
           <span class="attempt-result">${isFlash ? 'FLASH' : a.result === 'send' ? 'SENT' : 'attempt'}</span>
-          <span class="attempt-date">${esc(a.attempted_on)}</span>
+          <input type="date" class="attempt-date" data-date-attempt="${esc(a.id)}"
+            value="${esc(a.attempted_on)}" aria-label="Date logged" />
           ${a.climb_type ? `<span class="attempt-climb">${CLIMB_TYPE_LABELS[a.climb_type]}</span>` : ''}
           ${
             canFlash
@@ -2867,6 +2868,23 @@ async function renderRouteDetail(routeId: string): Promise<void> {
     btn.addEventListener('click', async () => {
       try {
         await api.updateAttempt(btn.dataset.flashAttempt!, { flashed: btn.dataset.flashed === '1' ? 0 : 1 });
+        void renderRouteDetail(route.id);
+      } catch (err) {
+        fail(err);
+      }
+    })
+  );
+
+  document.querySelectorAll<HTMLInputElement>('[data-date-attempt]').forEach((input) =>
+    input.addEventListener('change', async () => {
+      const attempted_on = input.value;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(attempted_on)) {
+        toast('Pick a valid date.');
+        input.value = attempts.find((a) => a.id === input.dataset.dateAttempt)?.attempted_on ?? '';
+        return;
+      }
+      try {
+        await api.updateAttempt(input.dataset.dateAttempt!, { attempted_on });
         void renderRouteDetail(route.id);
       } catch (err) {
         fail(err);

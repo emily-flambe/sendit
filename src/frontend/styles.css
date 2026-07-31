@@ -765,6 +765,18 @@ input[type='radio'] {
   flex: 1;
   color: var(--chalk-faint);
   font-size: 13px;
+  min-width: 0;
+  padding: 2px 4px;
+  font-family: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.attempt-date:hover,
+.attempt-date:focus {
+  border-color: var(--line);
+  color: var(--chalk);
 }
 
 .attempt-climb {

@@ -244,6 +244,35 @@ describe('gyms and routes', () => {
     expect(bad.status).toBe(400);
   });
 
+  it('edits the date an attempt was logged on', async () => {
+    const created = await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V4' }, token);
+    const routeId = created.data.route.id as string;
+
+    const attempt = await call(
+      'POST',
+      `/api/routes/${routeId}/attempts`,
+      { attempted_on: '2026-07-15', result: 'attempt', notes: 'greasy holds' },
+      token
+    );
+    const attemptId = attempt.data.attempt.id as string;
+
+    const moved = await call('PATCH', `/api/attempts/${attemptId}`, { attempted_on: '2026-07-12' }, token);
+    expect(moved.status).toBe(200);
+    expect(moved.data.attempt.attempted_on).toBe('2026-07-12');
+    expect(moved.data.attempt.notes).toBe('greasy holds');
+
+    const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(detail.data.attempts[0].attempted_on).toBe('2026-07-12');
+
+    const logged = await call('GET', '/api/attempts', undefined, token);
+    expect(logged.data.entries.find((e: Json) => e.id === attemptId).attempted_on).toBe('2026-07-12');
+
+    const badDate = await call('PATCH', `/api/attempts/${attemptId}`, { attempted_on: '7/12/2026' }, token);
+    expect(badDate.status).toBe(400);
+    const unchanged = await call('GET', `/api/routes/${routeId}`, undefined, token);
+    expect(unchanged.data.attempts[0].attempted_on).toBe('2026-07-12');
+  });
+
   it('rejects malformed attempts', async () => {
     const created = await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V1' }, token);
     const routeId = created.data.route.id as string;
