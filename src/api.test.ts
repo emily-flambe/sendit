@@ -244,28 +244,71 @@ describe('gyms and routes', () => {
     expect(bad.status).toBe(400);
   });
 
-  it('edits the date an attempt was logged on', async () => {
+  it('loads a single attempt with its route for the edit form', async () => {
+    const created = await call('POST', `/api/gyms/${gymId}/routes`, { grade: '5.11a', discipline: 'route' }, token);
+    const routeId = created.data.route.id as string;
+    const attempt = await call(
+      'POST',
+      `/api/routes/${routeId}/attempts`,
+      { attempted_on: '2026-07-15', result: 'attempt', climb_type: 'lead' },
+      token
+    );
+    const attemptId = attempt.data.attempt.id as string;
+
+    const loaded = await call('GET', `/api/attempts/${attemptId}`, undefined, token);
+    expect(loaded.status).toBe(200);
+    expect(loaded.data.attempt.climb_type).toBe('lead');
+    expect(loaded.data.route.id).toBe(routeId);
+    expect(loaded.data.route.discipline).toBe('route');
+
+    expect((await call('GET', `/api/attempts/${attemptId}`, undefined, undefined)).status).toBe(401);
+    const stranger = await registerUser('nosy-editor');
+    expect((await call('GET', `/api/attempts/${attemptId}`, undefined, stranger)).status).toBe(404);
+    expect((await call('GET', '/api/attempts/nope', undefined, token)).status).toBe(404);
+  });
+
+  it('edits every field of a logged attempt', async () => {
     const created = await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V4' }, token);
     const routeId = created.data.route.id as string;
 
     const attempt = await call(
       'POST',
       `/api/routes/${routeId}/attempts`,
-      { attempted_on: '2026-07-15', result: 'attempt', notes: 'greasy holds' },
+      { attempted_on: '2026-07-15', result: 'attempt', high_point: 'the crux', notes: 'greasy holds' },
       token
     );
     const attemptId = attempt.data.attempt.id as string;
 
-    const moved = await call('PATCH', `/api/attempts/${attemptId}`, { attempted_on: '2026-07-12' }, token);
-    expect(moved.status).toBe(200);
-    expect(moved.data.attempt.attempted_on).toBe('2026-07-12');
-    expect(moved.data.attempt.notes).toBe('greasy holds');
+    const edited = await call(
+      'PATCH',
+      `/api/attempts/${attemptId}`,
+      {
+        attempted_on: '2026-07-12',
+        result: 'send',
+        flashed: 1,
+        high_point: '',
+        notes: 'stuck the toe hook',
+      },
+      token
+    );
+    expect(edited.status).toBe(200);
+    expect(edited.data.attempt).toMatchObject({
+      attempted_on: '2026-07-12',
+      result: 'send',
+      flashed: 1,
+      high_point: '',
+      notes: 'stuck the toe hook',
+    });
 
     const detail = await call('GET', `/api/routes/${routeId}`, undefined, token);
-    expect(detail.data.attempts[0].attempted_on).toBe('2026-07-12');
+    expect(detail.data.attempts[0]).toMatchObject({ attempted_on: '2026-07-12', result: 'send', flashed: 1 });
 
     const logged = await call('GET', '/api/attempts', undefined, token);
     expect(logged.data.entries.find((e: Json) => e.id === attemptId).attempted_on).toBe('2026-07-12');
+
+    // A partial patch leaves the untouched fields alone.
+    const partial = await call('PATCH', `/api/attempts/${attemptId}`, { notes: 'sent it again' }, token);
+    expect(partial.data.attempt).toMatchObject({ attempted_on: '2026-07-12', result: 'send', notes: 'sent it again' });
 
     const badDate = await call('PATCH', `/api/attempts/${attemptId}`, { attempted_on: '7/12/2026' }, token);
     expect(badDate.status).toBe(400);
