@@ -791,6 +791,19 @@ input[type='radio'] {
   border-top: 1px dashed var(--line);
 }
 
+.form-page .danger-zone {
+  margin-top: 24px;
+}
+
+.form-lede {
+  margin: 0 0 16px;
+  font-family: var(--display);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--chalk-dim);
+}
+
 /* ---------- gyms ---------- */
 
 .gyms {

@@ -149,8 +149,11 @@ export const api = {
       notes?: string;
     }
   ) => request<{ attempt: Attempt }>('POST', `/routes/${routeId}/attempts`, fields),
-  updateAttempt: (id: string, fields: Partial<Pick<Attempt, 'attempted_on' | 'result' | 'flashed' | 'high_point' | 'notes'>>) =>
-    request<{ attempt: Attempt }>('PATCH', `/attempts/${id}`, fields),
+  getAttempt: (id: string) => request<{ attempt: Attempt; route: Route | null }>('GET', `/attempts/${id}`),
+  updateAttempt: (
+    id: string,
+    fields: Partial<Pick<Attempt, 'attempted_on' | 'result' | 'climb_type' | 'flashed' | 'high_point' | 'notes'>>
+  ) => request<{ attempt: Attempt }>('PATCH', `/attempts/${id}`, fields),
   deleteAttempt: (id: string) => request<{ success: boolean }>('DELETE', `/attempts/${id}`),
 
   uploadBlob: async <T>(path: string, blob: Blob): Promise<T> => {

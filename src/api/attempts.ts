@@ -22,6 +22,17 @@ attempts.get('/', async (c) => {
   return c.json({ entries });
 });
 
+attempts.get('/:id', async (c) => {
+  const attempt = await queries.getAttempt(c.env.DB, c.get('userId'), c.req.param('id'));
+  if (!attempt) {
+    return c.json({ error: 'Attempt not found' }, 404);
+  }
+  // The edit form needs the parent route's discipline to decide whether the
+  // climb-type picker applies.
+  const route = await queries.getRoute(c.env.DB, c.get('userId'), attempt.route_id);
+  return c.json({ attempt, route });
+});
+
 attempts.patch('/:id', async (c) => {
   const parsed = attemptPatchSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {

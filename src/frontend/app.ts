@@ -4,6 +4,7 @@ import {
   getToken,
   setToken,
   type Attempt,
+  type AttemptResult,
   type CatalogEntryWithImport,
   type CatalogSource,
   type ClimbType,
@@ -2645,6 +2646,7 @@ async function renderRouteDetail(routeId: string): Promise<void> {
                   data-flashed="${a.flashed}" aria-pressed="${isFlash}">flash</button>`
               : ''
           }
+          <a class="linkish" href="#/attempt/${esc(a.id)}/edit">Edit</a>
           <button class="linkish" data-del-attempt="${esc(a.id)}" aria-label="Delete entry">&times;</button>
         </div>
         ${detail ? `<p class="attempt-detail">${esc(detail)}</p>` : ''}
@@ -2900,6 +2902,84 @@ async function renderRouteDetail(routeId: string): Promise<void> {
     try {
       await api.deleteRoute(route.id);
       window.location.hash = '#/routes';
+    } catch (err) {
+      fail(err);
+    }
+  });
+}
+
+// ---------- edit a logged attempt ----------
+
+async function renderAttemptEdit(attemptId: string): Promise<void> {
+  let attempt: Attempt;
+  let route: Route | null;
+  try {
+    ({ attempt, route } = await api.getAttempt(attemptId));
+  } catch (err) {
+    fail(err);
+    window.location.hash = '#/';
+    return;
+  }
+
+  const back = route ? `#/route/${esc(route.id)}` : '#/';
+  const roped = route?.discipline === 'route';
+  const title = route ? routeTitle(route) : 'this climb';
+
+  shell(
+    `<header class="masthead compact">
+      <a class="back" href="${back}">&larr;</a>
+      <h2>Edit entry</h2>
+    </header>
+    <main class="form-page">
+      <p class="form-lede">${esc(title)}</p>
+      <form id="attempt-edit-form">
+        <div class="seg">
+          <label><input type="radio" name="result" value="send" ${attempt.result === 'send' ? 'checked' : ''} /><span>Sent</span></label>
+          <label><input type="radio" name="result" value="attempt" ${attempt.result === 'attempt' ? 'checked' : ''} /><span>Didn't send</span></label>
+        </div>
+        ${roped ? climbTypeSeg(attempt.climb_type || 'top_rope') : ''}
+        <label class="flash-toggle"><input type="checkbox" name="flashed" ${attempt.flashed === 1 ? 'checked' : ''} /><span>Flash <span class="hint">(sent it on the very first try)</span></span></label>
+        <label>Date <input type="date" name="attempted_on" value="${esc(attempt.attempted_on)}" required /></label>
+        <label>How far? <span class="hint">(if you didn't send)</span>
+          <input name="high_point" value="${esc(attempt.high_point)}" placeholder="past the crux, 3rd clip, off the ground…" />
+        </label>
+        <label>Notes <textarea name="notes" rows="3" placeholder="what happened">${esc(attempt.notes)}</textarea></label>
+        <button type="submit" class="btn primary wide">Save changes</button>
+      </form>
+      <section class="danger-zone">
+        <button class="linkish danger" id="attempt-delete-btn">Delete this entry</button>
+      </section>
+    </main>`,
+    'log'
+  );
+
+  const form = document.getElementById('attempt-edit-form') as HTMLFormElement;
+  wireFlashToggle(form);
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = new FormData(form);
+    try {
+      await api.updateAttempt(attempt.id, {
+        attempted_on: String(data.get('attempted_on')),
+        result: String(data.get('result')) as AttemptResult,
+        climb_type: roped ? ((data.get('climb_type') as ClimbType | null) ?? '') : '',
+        flashed: flashedFromForm(data),
+        high_point: String(data.get('high_point') ?? ''),
+        notes: String(data.get('notes') ?? ''),
+      });
+      toast('Entry updated.');
+      window.location.hash = back;
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+  document.getElementById('attempt-delete-btn')!.addEventListener('click', async () => {
+    if (!confirm('Delete this log entry?')) return;
+    try {
+      await api.deleteAttempt(attempt.id);
+      window.location.hash = back;
     } catch (err) {
       fail(err);
     }
@@ -3194,6 +3274,7 @@ async function route(): Promise<void> {
   const photoMatch = hash.match(/^#\/photo\/([\w-]+)$/);
   const newMatch = hash.match(/^#\/new(?:\?(.*))?$/);
   const importMatch = hash.match(/^#\/gym\/([\w-]+)\/import$/);
+  const attemptEditMatch = hash.match(/^#\/attempt\/([\w-]+)\/edit$/);
 
   if (hash === '#/') {
     await renderLog();
@@ -3207,6 +3288,8 @@ async function route(): Promise<void> {
     await renderRouteForm(editMatch[1]);
   } else if (detailMatch) {
     await renderRouteDetail(detailMatch[1]);
+  } else if (attemptEditMatch) {
+    await renderAttemptEdit(attemptEditMatch[1]);
   } else if (hash === '#/photos') {
     await renderGallery();
   } else if (photoMatch) {
