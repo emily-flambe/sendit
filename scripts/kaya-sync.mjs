@@ -79,7 +79,7 @@ try {
       await gql(
         `query($id:ID!,$offset:Int!,$count:Int!){
            webClimbsForGym(gym_id:$id,offset:$offset,count:$count){
-             id slug rating ascent_count is_closed
+             id slug rating ascent_count is_closed date_updated
              grade { name } color { name } climb_type { name } wall { id name }
            }
          }`,
@@ -131,18 +131,20 @@ try {
         c.is_closed ? 1 : 0,
         now,
         now,
+        sqlStr(c.date_updated ?? ''),
       ].join(', ');
       // first_seen_at survives an update so "new this week" stays meaningful;
       // removed_at clears because seeing the climb again means it is back.
       lines.push(
-        `INSERT INTO gym_catalog (id, source, source_gym_id, source_gym_name, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at)
+        `INSERT INTO gym_catalog (id, source, source_gym_id, source_gym_name, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, source_updated_at)
 VALUES (${cols})
 ON CONFLICT(source, external_id) DO UPDATE SET
   source_gym_id = excluded.source_gym_id, source_gym_name = excluded.source_gym_name,
   slug = excluded.slug, grade = excluded.grade,
   color = excluded.color, wall = excluded.wall, discipline = excluded.discipline,
   rating = excluded.rating, ascent_count = excluded.ascent_count, is_closed = excluded.is_closed,
-  last_seen_at = excluded.last_seen_at, removed_at = NULL;`,
+  last_seen_at = excluded.last_seen_at, source_updated_at = excluded.source_updated_at,
+  removed_at = NULL;`,
       );
     }
 

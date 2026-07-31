@@ -1,5 +1,6 @@
 import type {
   Attempt,
+  CatalogEntry,
   CatalogEntryWithImport,
   CatalogSource,
   Gym,
@@ -185,6 +186,72 @@ export async function importCatalogEntries(
     );
   }
   return { routes, skipped };
+}
+
+// Point an existing hand-entered route at a catalog climb. Adopts the catalog's
+// wall label, which overwrites whatever the user typed — unlinking does not put
+// it back. Returns null if the route or the entry isn't usable.
+export async function linkRouteToCatalog(
+  db: D1Database,
+  userId: string,
+  routeId: string,
+  catalogId: string
+): Promise<Route | null> {
+  const route = await getRoute(db, userId, routeId);
+  if (!route) return null;
+
+  const gym = await getGym(db, userId, route.gym_id);
+  if (!gym?.catalog_source || !gym.catalog_gym_id) return null;
+
+  const entry = await db
+    .prepare(
+      `SELECT * FROM gym_catalog
+       WHERE id = ? AND source = ? AND source_gym_id = ?`
+    )
+    .bind(catalogId, gym.catalog_source, gym.catalog_gym_id)
+    .first<CatalogEntry>();
+  if (!entry) return null;
+
+  // One climb maps to at most one route per gym, so a second claim is refused
+  // rather than silently splitting a climb's history across two routes.
+  const claimed = await db
+    .prepare(
+      `SELECT id FROM routes
+       WHERE gym_id = ? AND source = ? AND source_external_id = ? AND id <> ?`
+    )
+    .bind(route.gym_id, entry.source, entry.external_id, routeId)
+    .first<{ id: string }>();
+  if (claimed) return null;
+
+  const next: Route = {
+    ...route,
+    wall: entry.wall,
+    source: entry.source,
+    source_external_id: entry.external_id,
+    updated_at: Date.now(),
+  };
+  await db
+    .prepare('UPDATE routes SET wall = ?, source = ?, source_external_id = ?, updated_at = ? WHERE id = ?')
+    .bind(next.wall, next.source, next.source_external_id, next.updated_at, routeId)
+    .run();
+  return next;
+}
+
+// Drops the catalog association. The wall label stays as-is.
+export async function unlinkRouteFromCatalog(
+  db: D1Database,
+  userId: string,
+  routeId: string
+): Promise<Route | null> {
+  const route = await getRoute(db, userId, routeId);
+  if (!route || !route.source) return null;
+
+  const next: Route = { ...route, source: '', source_external_id: '', updated_at: Date.now() };
+  await db
+    .prepare("UPDATE routes SET source = '', source_external_id = '', updated_at = ? WHERE id = ?")
+    .bind(next.updated_at, routeId)
+    .run();
+  return next;
 }
 
 // Route cards for the routes list, either across every gym or scoped to one.

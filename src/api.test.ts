@@ -1177,3 +1177,73 @@ describe('log entries expose the route wall', () => {
     expect(log.data.entries[0].route_wall).toBe('B4 - The Cave');
   });
 });
+
+describe('linking an existing route to a catalog climb', () => {
+  let token: string;
+  let gymId: string;
+  let routeId: string;
+
+  beforeAll(async () => {
+    token = await registerUser('linker');
+    gymId = (await call('POST', '/api/gyms', { name: 'Movement' }, token)).data.gym.id;
+    await call('PATCH', `/api/gyms/${gymId}`, { catalog_source: 'kaya', catalog_gym_id: '211' }, token);
+    await env.DB.prepare(
+      `INSERT INTO gym_catalog (id, source, source_gym_id, source_gym_name, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, removed_at, source_updated_at)
+       VALUES ('kaya:L1','kaya','211','Movement Boulder','L1','','v4','pink','B3 - West Wall Right','boulder',NULL,0,0,1,1,NULL,'2026-07-30T12:00:00.000Z'),
+              ('kaya:L2','kaya','211','Movement Boulder','L2','','v4','pink','B3 - West Wall Right','boulder',NULL,0,0,1,1,NULL,'2026-06-01T12:00:00.000Z')`
+    ).run();
+    routeId = (
+      await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V4', color: 'pink', wall: 'my own words' }, token)
+    ).data.route.id;
+  });
+
+  it('links a hand-entered route and adopts the catalog wall label', async () => {
+    const res = await call('PUT', `/api/routes/${routeId}/catalog-link`, { catalog_id: 'kaya:L1' }, token);
+    expect(res.status).toBe(200);
+    expect(res.data.route.source).toBe('kaya');
+    expect(res.data.route.source_external_id).toBe('L1');
+    expect(res.data.route.wall).toBe('B3 - West Wall Right'); // replaces "my own words"
+
+    // The catalog now reports it as claimed, which is what keeps the import
+    // screen from offering it again.
+    const catalog = (await call('GET', `/api/gyms/${gymId}/catalog`, undefined, token)).data.catalog as Json[];
+    expect(catalog.find((e) => e.external_id === 'L1')!.imported_route_id).toBe(routeId);
+  });
+
+  it('exposes the set date, which is the only way to tell the two v4 pinks apart', async () => {
+    const catalog = (await call('GET', `/api/gyms/${gymId}/catalog`, undefined, token)).data.catalog as Json[];
+    expect(catalog.map((e) => e.source_updated_at).sort()).toEqual([
+      '2026-06-01T12:00:00.000Z',
+      '2026-07-30T12:00:00.000Z',
+    ]);
+  });
+
+  it('refuses a climb already claimed by another route', async () => {
+    await call('PUT', `/api/routes/${routeId}/catalog-link`, { catalog_id: 'kaya:L1' }, token);
+    const other = (await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V4', color: 'pink' }, token)).data.route.id;
+    const res = await call('PUT', `/api/routes/${other}/catalog-link`, { catalog_id: 'kaya:L1' }, token);
+    expect(res.status).toBe(409);
+  });
+
+  it('unlinks, leaving the adopted wall text in place', async () => {
+    await call('PUT', `/api/routes/${routeId}/catalog-link`, { catalog_id: 'kaya:L1' }, token);
+    const res = await call('DELETE', `/api/routes/${routeId}/catalog-link`, undefined, token);
+    expect(res.status).toBe(200);
+    expect(res.data.route.source).toBe('');
+    expect(res.data.route.wall).toBe('B3 - West Wall Right');
+
+    expect((await call('DELETE', `/api/routes/${routeId}/catalog-link`, undefined, token)).status).toBe(404);
+  });
+
+  it('refuses a climb from a gym the route does not belong to', async () => {
+    await env.DB.prepare("UPDATE gym_catalog SET source_gym_id='999' WHERE external_id='L2'").run();
+    const res = await call('PUT', `/api/routes/${routeId}/catalog-link`, { catalog_id: 'kaya:L2' }, token);
+    expect(res.status).toBe(409);
+  });
+
+  it('will not let another user link your route', async () => {
+    const stranger = await registerUser('link-snoop');
+    const res = await call('PUT', `/api/routes/${routeId}/catalog-link`, { catalog_id: 'kaya:L1' }, stranger);
+    expect(res.status).toBe(404);
+  });
+});
