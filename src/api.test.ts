@@ -1247,3 +1247,78 @@ describe('linking an existing route to a catalog climb', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('map pins', () => {
+  let token: string;
+  let gymId: string;
+
+  beforeAll(async () => {
+    token = await registerUser('pin-placer');
+    gymId = (await call('POST', '/api/gyms', { name: 'Movement' }, token)).data.gym.id;
+    await call(
+      'PATCH',
+      `/api/gyms/${gymId}`,
+      { map_boulder_url: '/maps/bouldering.png', map_route_url: '/maps/routes.png' },
+      token
+    );
+  });
+
+  it('stores the gym map urls', async () => {
+    const gyms = (await call('GET', '/api/gyms', undefined, token)).data.gyms as Json[];
+    const gym = gyms.find((g) => g.id === gymId)!;
+    expect(gym.map_boulder_url).toBe('/maps/bouldering.png');
+    expect(gym.map_route_url).toBe('/maps/routes.png');
+  });
+
+  it('round-trips a pin through create, read and update', async () => {
+    const created = await call(
+      'POST',
+      `/api/gyms/${gymId}/routes`,
+      { grade: 'V3', color: 'blue', discipline: 'boulder', map_x: 0.25, map_y: 0.6 },
+      token
+    );
+    expect(created.data.route.map_x).toBeCloseTo(0.25);
+
+    const id = created.data.route.id as string;
+    // Read back from the DB, not the create response: an allowlisted field map
+    // would drop the columns silently and the response would still look right.
+    const read = await call('GET', `/api/routes/${id}`, undefined, token);
+    expect(read.data.route.map_x).toBeCloseTo(0.25);
+    expect(read.data.route.map_y).toBeCloseTo(0.6);
+
+    await call('PATCH', `/api/routes/${id}`, { map_x: 0.8, map_y: 0.1 }, token);
+    const moved = await call('GET', `/api/routes/${id}`, undefined, token);
+    expect(moved.data.route.map_x).toBeCloseTo(0.8);
+    expect(moved.data.route.map_y).toBeCloseTo(0.1);
+  });
+
+  it('clears a pin with null and defaults to unplaced', async () => {
+    const bare = await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V1' }, token);
+    expect(bare.data.route.map_x).toBeNull();
+
+    const id = (
+      await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V2', map_x: 0.5, map_y: 0.5 }, token)
+    ).data.route.id as string;
+    await call('PATCH', `/api/routes/${id}`, { map_x: null, map_y: null }, token);
+    const cleared = await call('GET', `/api/routes/${id}`, undefined, token);
+    expect(cleared.data.route.map_x).toBeNull();
+    expect(cleared.data.route.map_y).toBeNull();
+  });
+
+  it('rejects coordinates outside the image', async () => {
+    const bad = await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V2', map_x: 1.4, map_y: 0.2 }, token);
+    expect(bad.status).toBe(400);
+    const neg = await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V2', map_x: 0.2, map_y: -0.1 }, token);
+    expect(neg.status).toBe(400);
+  });
+
+  it('leaves the pin alone when editing other fields', async () => {
+    const id = (
+      await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V5', map_x: 0.33, map_y: 0.44 }, token)
+    ).data.route.id as string;
+    await call('PATCH', `/api/routes/${id}`, { notes: 'crimpy' }, token);
+    const after = await call('GET', `/api/routes/${id}`, undefined, token);
+    expect(after.data.route.map_x).toBeCloseTo(0.33);
+    expect(after.data.route.notes).toBe('crimpy');
+  });
+});

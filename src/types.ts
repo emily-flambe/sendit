@@ -21,6 +21,9 @@ export interface Gym {
   // when the gym has no catalog, which is the default.
   catalog_source: string;
   catalog_gym_id: string;
+  // Floor-map images for this gym, one per discipline. '' means no map.
+  map_boulder_url: string;
+  map_route_url: string;
 }
 
 export interface Route {
@@ -38,6 +41,9 @@ export interface Route {
   // Provenance when the route came from a catalog import; '' when hand-entered.
   source: string;
   source_external_id: string;
+  // Hand-placed pin on the gym map, normalized to the image. null if unplaced.
+  map_x: number | null;
+  map_y: number | null;
 }
 
 // One climb the gym currently has set, as reported by an external platform.

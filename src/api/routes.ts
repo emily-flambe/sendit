@@ -20,6 +20,8 @@ const routePatchSchema = z.object({
   notes: z.string().max(4000).optional(),
   archived: z.union([z.literal(0), z.literal(1)]).optional(),
   gym_id: z.string().trim().min(1).optional(),
+  map_x: z.number().min(0).max(1).nullable().optional(),
+  map_y: z.number().min(0).max(1).nullable().optional(),
 });
 
 const catalogLinkSchema = z.object({ catalog_id: z.string().trim().min(1) });
