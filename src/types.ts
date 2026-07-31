@@ -59,6 +59,8 @@ export interface CatalogEntry {
   first_seen_at: number;
   last_seen_at: number;
   removed_at: number | null;
+  // When the source says the climb was last set. ISO string, '' if unknown.
+  source_updated_at: string;
 }
 
 // A catalog entry annotated with whether this user already imported it.

@@ -154,6 +154,16 @@ function routeState(r: { send_count: number; attempt_count: number }): RouteStat
   return 'new';
 }
 
+// KAYA reports when a climb was last set as an ISO timestamp. Shown as a short
+// date because that's the only field that distinguishes two same-colour,
+// same-grade climbs on one wall.
+function setDateLabel(e: { source_updated_at: string }): string {
+  if (!e.source_updated_at) return '';
+  const d = new Date(e.source_updated_at);
+  if (Number.isNaN(d.getTime())) return '';
+  return `set ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+}
+
 // Catalog-imported climbs have no name — gyms like Movement don't name their
 // boulders — so the wall is what tells a dozen same-colour V2s apart. A named
 // route keeps its wall in the meta line instead, so the wall shows up once.
@@ -2609,6 +2619,100 @@ async function renderRouteForm(routeId: string | null, linkPhotoId: string | nul
 
 // ---------- route detail ----------
 
+// Lets a hand-entered route point at a climb from the gym's catalog. Rendered
+// after the page so a slow catalog fetch never blocks the route detail, and
+// skipped entirely for gyms with no catalog.
+async function renderKayaLink(route: Route, rerender: () => void): Promise<void> {
+  const host = document.getElementById('kaya-link');
+  if (!host) return;
+
+  const gym = gyms.find((g) => g.id === route.gym_id);
+  if (!gym?.catalog_source) {
+    host.remove();
+    return;
+  }
+
+  if (route.source) {
+    host.innerHTML = `<div class="section-head">
+        <h3>KAYA climb</h3>
+        <button class="linkish danger" id="kaya-unlink">Unlink</button>
+      </div>
+      <p class="hint">Linked to the ${esc(route.wall)} climb on KAYA.</p>`;
+    document.getElementById('kaya-unlink')!.addEventListener('click', async () => {
+      try {
+        await api.unlinkRouteFromCatalog(route.id);
+        toast('Unlinked');
+        rerender();
+      } catch (err) {
+        fail(err);
+      }
+    });
+    return;
+  }
+
+  let catalog: CatalogEntryWithImport[];
+  try {
+    catalog = (await api.listGymCatalog(gym.id)).catalog;
+  } catch {
+    host.remove();
+    return;
+  }
+
+  // Unclaimed climbs of the same kind. Offering a rope route as a candidate for
+  // a boulder is never right, so that's filtered rather than left to the search.
+  const free = catalog.filter((e) => !e.imported_route_id && e.discipline === route.discipline);
+  if (free.length === 0) {
+    host.remove();
+    return;
+  }
+
+  host.innerHTML = `<div class="section-head"><h3>KAYA climb</h3></div>
+    <p class="hint">Same colour and grade can repeat on a wall, so check the set date.</p>
+    <input id="kaya-search" placeholder="filter by wall, grade or colour" />
+    <ul class="kaya-options" id="kaya-options"></ul>`;
+
+  const list = document.getElementById('kaya-options') as HTMLUListElement;
+  const search = document.getElementById('kaya-search') as HTMLInputElement;
+
+  const draw = () => {
+    const q = search.value.trim().toLowerCase();
+    const hits = free
+      .filter((e) => !q || `${e.wall} ${e.grade} ${e.color}`.toLowerCase().includes(q))
+      // Most recently set first: a climb you're logging today is likely a new one.
+      .sort((a, b) => b.source_updated_at.localeCompare(a.source_updated_at))
+      .slice(0, 40);
+    list.innerHTML =
+      hits
+        .map(
+          (e) => `<li>
+            <button class="kaya-option" data-pick="${esc(e.id)}">
+              <span class="tape" style="background:${colorHex(e.color)}"></span>
+              <span class="kaya-option-body">
+                <strong>${esc([e.grade, e.color].filter(Boolean).join(' · '))}</strong>
+                <span class="catalog-row-meta">${esc([e.wall, setDateLabel(e)].filter(Boolean).join(' · '))}</span>
+              </span>
+            </button>
+          </li>`
+        )
+        .join('') || '<li class="empty">No climbs match.</li>';
+
+    list.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((btn) =>
+      btn.addEventListener('click', async () => {
+        try {
+          await api.linkRouteToCatalog(route.id, btn.dataset.pick!);
+          toast('Linked to KAYA climb');
+          rerender();
+        } catch (err) {
+          fail(err);
+        }
+      })
+    );
+  };
+
+  search.addEventListener('input', draw);
+  draw();
+}
+
 async function renderRouteDetail(routeId: string): Promise<void> {
   let route: Route;
   let attempts: Attempt[];
@@ -2701,6 +2805,7 @@ async function renderRouteDetail(routeId: string): Promise<void> {
         </div>
         ${routeImage ? '<div id="ri-view"></div>' : '<button class="annot-create" id="ri-create">Create route image</button>'}
       </section>
+      <section class="kaya-link" id="kaya-link"></section>
       ${route.notes ? `<section class="route-notes"><h3>Notes</h3><p>${esc(route.notes)}</p></section>` : ''}
       <section class="log-actions" style="--route-color:${colorHex(route.color)}">
         <button class="btn send-btn" id="attempt-btn">Log attempt</button>
@@ -2730,6 +2835,8 @@ async function renderRouteDetail(routeId: string): Promise<void> {
   );
 
   const rerender = () => void renderRouteDetail(route.id);
+
+  void renderKayaLink(route, rerender);
   const photoVersion = (photoId: string) => photos.find((p) => p.id === photoId)?.updated_at ?? 0;
   const editImage = (photoId: string, initial: RouteMarker[], drawings: DrawingItem[] = []) =>
     openRouteImageEditor(route.id, photoId, photoVersion(photoId), initial, route.color, rerender, drawings);
@@ -2936,15 +3043,13 @@ async function renderCatalogImport(gymId: string): Promise<void> {
       const rows = entries
         .map((e) => {
           const done = Boolean(e.imported_route_id);
-          const stars = e.rating ? `${e.rating.toFixed(1)}★` : '';
-          const tries = e.ascent_count ? `${e.ascent_count} sends` : '';
           return `<li class="catalog-row${done ? ' done' : ''}">
             <label>
               <input type="checkbox" data-entry="${esc(e.id)}" ${done ? 'checked disabled' : ''} />
               <span class="tape" style="background:${colorHex(e.color)}"></span>
               <span class="catalog-row-body">
                 <strong>${esc(e.grade)}</strong>
-                <span class="catalog-row-meta">${esc([e.color, stars, tries].filter(Boolean).join(' · '))}</span>
+                <span class="catalog-row-meta">${esc([e.color, setDateLabel(e)].filter(Boolean).join(' · '))}</span>
               </span>
               ${done ? '<span class="state state-sent">added</span>' : ''}
             </label>

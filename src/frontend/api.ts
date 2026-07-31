@@ -136,6 +136,10 @@ export const api = {
     request<{ route_image: RouteImage }>('PUT', `/routes/${routeId}/image`, { photo_id: photoId, markers, drawings }),
   deleteRouteImage: (routeId: string) => request<{ success: boolean }>('DELETE', `/routes/${routeId}/image`),
   updateRoute: (id: string, fields: Partial<Route>) => request<{ route: Route }>('PATCH', `/routes/${id}`, fields),
+  linkRouteToCatalog: (routeId: string, catalogId: string) =>
+    request<{ route: Route }>('PUT', `/routes/${routeId}/catalog-link`, { catalog_id: catalogId }),
+  unlinkRouteFromCatalog: (routeId: string) =>
+    request<{ route: Route }>('DELETE', `/routes/${routeId}/catalog-link`),
   deleteRoute: (id: string) => request<{ success: boolean }>('DELETE', `/routes/${id}`),
 
   createAttempt: (

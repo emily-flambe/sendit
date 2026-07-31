@@ -22,6 +22,8 @@ const routePatchSchema = z.object({
   gym_id: z.string().trim().min(1).optional(),
 });
 
+const catalogLinkSchema = z.object({ catalog_id: z.string().trim().min(1) });
+
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
 
 // Markers are normalized to the image (x/y in [0,1], r as fraction of width).
@@ -138,6 +140,38 @@ routes.patch('/:id', async (c) => {
     return c.json({ error: 'Route not found' }, 404);
   }
   return c.json({ route });
+});
+
+// Associate a route the user entered by hand with a climb from the gym's
+// catalog. 409 rather than 404 when the climb already belongs to another route,
+// so the client can say which case it hit.
+routes.put('/:id/catalog-link', async (c) => {
+  const parsed = catalogLinkSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) {
+    return c.json({ error: 'Invalid catalog id' }, 400);
+  }
+  const route = await queries.getRoute(c.env.DB, c.get('userId'), c.req.param('id'));
+  if (!route) {
+    return c.json({ error: 'Route not found' }, 404);
+  }
+  const linked = await queries.linkRouteToCatalog(
+    c.env.DB,
+    c.get('userId'),
+    route.id,
+    parsed.data.catalog_id
+  );
+  if (!linked) {
+    return c.json({ error: 'That climb is not available to link' }, 409);
+  }
+  return c.json({ route: linked });
+});
+
+routes.delete('/:id/catalog-link', async (c) => {
+  const unlinked = await queries.unlinkRouteFromCatalog(c.env.DB, c.get('userId'), c.req.param('id'));
+  if (!unlinked) {
+    return c.json({ error: 'Route is not linked to a climb' }, 404);
+  }
+  return c.json({ route: unlinked });
 });
 
 routes.delete('/:id', async (c) => {

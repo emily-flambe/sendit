@@ -118,7 +118,8 @@ CREATE TABLE IF NOT EXISTS gym_catalog (
   is_closed INTEGER NOT NULL DEFAULT 0,
   first_seen_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
-  removed_at INTEGER
+  removed_at INTEGER,
+  source_updated_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_gym_catalog_external ON gym_catalog(source, external_id);
