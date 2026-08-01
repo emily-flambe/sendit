@@ -285,11 +285,14 @@ export async function listRoutes(
               COUNT(a.id) AS attempt_count,
               COALESCE(SUM(a.result = 'send'), 0) AS send_count,
               MAX(a.attempted_on) AS last_attempted_on,
+              COALESCE(SUBSTR(c.source_updated_at, 1, 10), MIN(a.attempted_on)) AS set_at,
               (SELECT COUNT(*) FROM route_photo_links l WHERE l.route_id = r.id) AS photo_count,
               ${THUMB_COLUMNS}
        FROM routes r
        JOIN gyms g ON g.id = r.gym_id
        LEFT JOIN attempts a ON a.route_id = r.id
+       LEFT JOIN gym_catalog c
+              ON r.source <> '' AND c.source = r.source AND c.external_id = r.source_external_id
        WHERE g.user_id = ? ${gymClause} ${archivedClause}
        GROUP BY r.id
        ORDER BY r.created_at DESC`

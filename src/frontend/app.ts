@@ -1874,7 +1874,6 @@ interface ListFilters {
 }
 
 const logFilters: ListFilters = { gym: 'all', discipline: 'all', status: 'all', sort: 'newest', grade: 'all' };
-const routeFilters: ListFilters = { gym: 'all', discipline: 'all', status: 'active', sort: 'recent', grade: 'all' };
 
 type Options = [string, string][];
 
@@ -1906,6 +1905,248 @@ function wireFilterBar(f: ListFilters, rerender: () => void): void {
       rerender();
     })
   );
+}
+
+// ---------- routes filter + sort ----------
+
+// The routes list used to be five equal dropdowns with no indication of which
+// were active. This model backs a Filters button (with a count and removable
+// chips) plus a separate sort control with an explicit direction.
+interface RouteQuery {
+  gym: string;
+  discipline: string;
+  status: string;
+  colors: string[];
+  grades: string[];
+  sortKey: 'set' | 'attempt' | 'grade';
+  sortDir: 'asc' | 'desc';
+}
+
+const routeQuery: RouteQuery = {
+  gym: 'all',
+  discipline: 'all',
+  status: 'active',
+  colors: [],
+  grades: [],
+  sortKey: 'set',
+  sortDir: 'desc',
+};
+
+// Which panel is open survives a re-render: picking a second colour shouldn't
+// mean re-opening the filter sheet after every tap.
+let openPanel: 'filters' | 'sort' | null = null;
+
+const SORT_LABELS: Record<RouteQuery['sortKey'], string> = {
+  set: 'Set date',
+  attempt: 'Last attempt',
+  grade: 'Grade',
+};
+
+const STATUS_OPTIONS: [string, string][] = [
+  ['active', 'All active'],
+  ['project', 'In progress'],
+  ['new', 'Not tried'],
+  ['sent', 'Sent'],
+  ['archived', 'Archived'],
+];
+
+function matchesQuery(r: RouteWithGym, q: RouteQuery): boolean {
+  if (q.gym !== 'all' && r.gym_id !== q.gym) return false;
+  if (q.discipline !== 'all' && r.discipline !== q.discipline) return false;
+  if (q.colors.length && !q.colors.includes(r.color.trim().toLowerCase())) return false;
+  if (q.grades.length && !q.grades.includes(r.grade.trim())) return false;
+  if (q.status === 'archived') return r.archived === 1;
+  if (r.archived === 1) return false;
+  if (q.status === 'active') return true;
+  return routeState(r) === q.status;
+}
+
+// Routes with nothing to sort by sink to the bottom either way — flipping the
+// direction shouldn't promote "never attempted" above real data.
+function sortRoutes(routes: RouteWithGym[], q: RouteQuery): RouteWithGym[] {
+  const key = (r: RouteWithGym): string | number | null =>
+    q.sortKey === 'grade' ? (r.grade.trim() ? gradeRank(r.grade) : null)
+    : q.sortKey === 'set' ? r.set_at
+    : r.last_attempted_on;
+
+  const dir = q.sortDir === 'asc' ? 1 : -1;
+  return [...routes].sort((a, b) => {
+    const ka = key(a);
+    const kb = key(b);
+    if (ka == null && kb == null) return 0;
+    if (ka == null) return 1;
+    if (kb == null) return -1;
+    if (typeof ka === 'number' && typeof kb === 'number') return (ka - kb) * dir;
+    return String(ka).localeCompare(String(kb)) * dir;
+  });
+}
+
+function activeFilterChips(q: RouteQuery, gradesInUse: string[]): string {
+  const chips: { label: string; clear: string }[] = [];
+  if (q.gym !== 'all') chips.push({ label: gyms.find((g) => g.id === q.gym)?.name ?? 'Gym', clear: 'gym' });
+  if (q.discipline !== 'all') chips.push({ label: `${DISCIPLINE_LABELS[q.discipline as Discipline]}s`, clear: 'discipline' });
+  if (q.status !== 'active') chips.push({ label: STATUS_OPTIONS.find(([v]) => v === q.status)?.[1] ?? q.status, clear: 'status' });
+  for (const c of q.colors) chips.push({ label: c, clear: `color:${c}` });
+  if (q.grades.length) {
+    // A long grade selection reads better as a span than as ten chips.
+    const ordered = gradesInUse.filter((g) => q.grades.includes(g));
+    const label = ordered.length > 2 ? `${ordered[0]}–${ordered[ordered.length - 1]}` : ordered.join(', ');
+    chips.push({ label, clear: 'grades' });
+  }
+  if (!chips.length) return '';
+  return `<div class="chip-row">
+    ${chips
+      .map(
+        (c) => `<button class="filter-chip" data-clear="${esc(c.clear)}">${esc(c.label)}<span aria-hidden="true">×</span></button>`
+      )
+      .join('')}
+    <button class="linkish" data-clear="all">Clear all</button>
+  </div>`;
+}
+
+// Counts applied values, not categories: two colours reads as 2, which is what
+// the chip row shows.
+function filterCount(q: RouteQuery): number {
+  return (
+    (q.gym !== 'all' ? 1 : 0) +
+    (q.discipline !== 'all' ? 1 : 0) +
+    (q.status !== 'active' ? 1 : 0) +
+    q.colors.length +
+    q.grades.length
+  );
+}
+
+function routeToolbar(q: RouteQuery, gradesInUse: string[]): string {
+  const n = filterCount(q);
+  const colorsInUse = Object.keys(NAMED_COLORS);
+  return `<div class="toolbar">
+      <button type="button" class="tool-btn" id="filters-btn" aria-expanded="false">
+        Filters${n ? `<span class="tool-count">${n}</span>` : ''}
+      </button>
+      <button type="button" class="tool-btn" id="sort-btn" aria-expanded="false">
+        <span class="sort-arrow">${q.sortDir === 'asc' ? '↑' : '↓'}</span> ${esc(SORT_LABELS[q.sortKey])}
+      </button>
+    </div>
+    ${activeFilterChips(q, gradesInUse)}
+    <div class="panel" id="sort-panel"${openPanel === 'sort' ? '' : ' hidden'}>
+      ${(Object.keys(SORT_LABELS) as RouteQuery['sortKey'][])
+        .map(
+          (k) => `<button type="button" class="panel-row${k === q.sortKey ? ' on' : ''}" data-sort="${k}">
+            ${esc(SORT_LABELS[k])}
+            <span>${k === q.sortKey ? (q.sortDir === 'asc' ? '↑ oldest first' : '↓ newest first') : ''}</span>
+          </button>`
+        )
+        .join('')}
+      <p class="hint">Tap the active sort to flip direction.</p>
+    </div>
+    <div class="panel" id="filter-panel"${openPanel === 'filters' ? '' : ' hidden'}>
+      ${
+        gyms.length > 1
+          ? `<div class="panel-group"><h4>Gym</h4>
+              <div class="seg-wrap">
+                <button type="button" class="seg-btn${q.gym === 'all' ? ' on' : ''}" data-gym-filter="all">All</button>
+                ${gyms
+                  .map(
+                    (g) => `<button type="button" class="seg-btn${q.gym === g.id ? ' on' : ''}" data-gym-filter="${esc(g.id)}">${esc(g.name)}</button>`
+                  )
+                  .join('')}
+              </div></div>`
+          : ''
+      }
+      <div class="panel-group"><h4>Activity</h4>
+        <div class="seg-wrap">
+          <button type="button" class="seg-btn${q.discipline === 'all' ? ' on' : ''}" data-disc="all">All</button>
+          <button type="button" class="seg-btn${q.discipline === 'boulder' ? ' on' : ''}" data-disc="boulder">Boulders</button>
+          <button type="button" class="seg-btn${q.discipline === 'route' ? ' on' : ''}" data-disc="route">Routes</button>
+        </div>
+      </div>
+      <div class="panel-group"><h4>Colour</h4>
+        <div class="swatches">
+          ${colorsInUse
+            .map(
+              (c) => `<button type="button" class="swatch${q.colors.includes(c) ? ' active' : ''}" data-color-filter="${c}"
+                style="background:${NAMED_COLORS[c]}" aria-label="${c}"></button>`
+            )
+            .join('')}
+        </div>
+      </div>
+      <div class="panel-group"><h4>Grade</h4>
+        <div class="chips">
+          ${gradesInUse
+            .map(
+              (g) => `<button type="button" class="chip${q.grades.includes(g) ? ' on' : ''}" data-grade-filter="${esc(g)}">${esc(g)}</button>`
+            )
+            .join('')}
+        </div>
+      </div>
+      <div class="panel-group"><h4>Status</h4>
+        <div class="seg-wrap">
+          ${STATUS_OPTIONS.map(
+            ([v, label]) => `<button type="button" class="seg-btn${q.status === v ? ' on' : ''}" data-status="${v}">${esc(label)}</button>`
+          ).join('')}
+        </div>
+      </div>
+    </div>`;
+}
+
+function wireRouteToolbar(q: RouteQuery, rerender: () => void): void {
+  const toggle = (which: 'filters' | 'sort', id: string, btnId: string) => {
+    const panel = document.getElementById(id)!;
+    const btn = document.getElementById(btnId)!;
+    btn.addEventListener('click', () => {
+      const opening = panel.hasAttribute('hidden');
+      // Only one panel at a time; two open sheets is a mess on a phone.
+      document.querySelectorAll('.panel').forEach((p) => p.setAttribute('hidden', ''));
+      document.querySelectorAll('.tool-btn').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+      openPanel = opening ? which : null;
+      if (opening) {
+        panel.removeAttribute('hidden');
+        btn.setAttribute('aria-expanded', 'true');
+      }
+    });
+  };
+  toggle('filters', 'filter-panel', 'filters-btn');
+  toggle('sort', 'sort-panel', 'sort-btn');
+
+  const set = (fn: () => void) => {
+    fn();
+    rerender();
+  };
+  const pick = <T extends HTMLElement>(sel: string, fn: (el: T) => void) =>
+    document.querySelectorAll<T>(sel).forEach((el) => el.addEventListener('click', () => set(() => fn(el))));
+
+  pick<HTMLButtonElement>('[data-sort]', (el) => {
+    openPanel = null;
+    const key = el.dataset.sort as RouteQuery['sortKey'];
+    if (q.sortKey === key) q.sortDir = q.sortDir === 'asc' ? 'desc' : 'asc';
+    else {
+      q.sortKey = key;
+      q.sortDir = 'desc';
+    }
+  });
+  pick<HTMLButtonElement>('[data-disc]', (el) => { q.discipline = el.dataset.disc!; });
+  pick<HTMLButtonElement>('[data-status]', (el) => { q.status = el.dataset.status!; });
+  pick<HTMLButtonElement>('[data-gym-filter]', (el) => { q.gym = el.dataset.gymFilter!; });
+  pick<HTMLButtonElement>('[data-color-filter]', (el) => {
+    const c = el.dataset.colorFilter!;
+    q.colors = q.colors.includes(c) ? q.colors.filter((x) => x !== c) : [...q.colors, c];
+  });
+  pick<HTMLButtonElement>('[data-grade-filter]', (el) => {
+    const g = el.dataset.gradeFilter!;
+    q.grades = q.grades.includes(g) ? q.grades.filter((x) => x !== g) : [...q.grades, g];
+  });
+  pick<HTMLButtonElement>('[data-clear]', (el) => {
+    const what = el.dataset.clear!;
+    if (what === 'all') {
+      openPanel = null;
+      q.gym = 'all'; q.discipline = 'all'; q.status = 'active'; q.colors = []; q.grades = [];
+    } else if (what.startsWith('color:')) {
+      q.colors = q.colors.filter((c) => c !== what.slice(6));
+    } else if (what === 'grades') q.grades = [];
+    else if (what === 'gym') q.gym = 'all';
+    else if (what === 'discipline') q.discipline = 'all';
+    else if (what === 'status') q.status = 'active';
+  });
 }
 
 // ---------- gym floor map ----------
@@ -1941,7 +2182,7 @@ function pinFromEvent(figure: HTMLElement, e: MouseEvent): { x: number; y: numbe
 // Every map that the current filters imply, each with a pin per visible route
 // that has one. Both disciplines show unless the discipline filter narrows it,
 // and a gym only contributes maps it actually has.
-function mapOverview(visible: RouteWithGym[], f: ListFilters): string {
+function mapOverview(visible: RouteWithGym[], f: { gym: string; discipline: string }): string {
   const gymIds = f.gym !== 'all' ? [f.gym] : [...new Set(visible.map((r) => r.gym_id))];
   const disciplines: Discipline[] = f.discipline === 'all' ? ['boulder', 'route'] : [f.discipline as Discipline];
   const multiGym = gymIds.length > 1;
@@ -2469,33 +2710,16 @@ async function renderRoutes(): Promise<void> {
     return;
   }
 
-  const f = routeFilters;
+  const q = routeQuery;
 
-  // Grades are freetext, so offer only the grades actually in use,
-  // easiest first. Built from all routes so the option list stays
-  // stable while other filters change.
+  // Grades are freetext, so offer only the ones actually in use, easiest first.
+  // Built from every route so the option list stays stable as filters change.
   const gradesInUse = [...new Set(routes.map((r) => r.grade.trim()).filter(Boolean))].sort(
     (a, b) => gradeRank(a) - gradeRank(b)
   );
-  if (f.grade !== 'all' && !gradesInUse.includes(f.grade)) f.grade = 'all';
-  const gradeOptions: Options = [['all', 'All grades'], ...gradesInUse.map((g): [string, string] => [g, g])];
+  q.grades = q.grades.filter((g) => gradesInUse.includes(g));
 
-  const visible = routes.filter((r) => {
-    if (f.gym !== 'all' && r.gym_id !== f.gym) return false;
-    if (f.discipline !== 'all' && r.discipline !== f.discipline) return false;
-    if (f.grade !== 'all' && r.grade.trim() !== f.grade) return false;
-    if (f.status === 'archived') return r.archived === 1;
-    if (r.archived === 1) return false;
-    if (f.status === 'active') return true;
-    return routeState(r) === f.status;
-  });
-
-  if (f.sort === 'recent') {
-    visible.sort((a, b) => (b.last_attempted_on ?? '').localeCompare(a.last_attempted_on ?? ''));
-  } else if (f.sort === 'grade') {
-    visible.sort((a, b) => gradeRank(b.grade) - gradeRank(a.grade));
-  }
-  // 'newest' keeps the server's created_at DESC order.
+  const visible = sortRoutes(routes.filter((r) => matchesQuery(r, q)), q);
 
   const cards = visible
     .map((r) => {
@@ -2526,34 +2750,21 @@ async function renderRoutes(): Promise<void> {
     .join('');
 
   const emptyCopy =
-    f.status === 'archived'
+    q.status === 'archived'
       ? 'Nothing archived here.'
-      : f.status === 'sent'
+      : q.status === 'sent'
         ? 'No sends match. Get after it.'
-        : f.status === 'project'
+        : q.status === 'project'
           ? 'Nothing in progress. Go fall off something.'
-          : 'No routes match. Add what the setters put up.';
+          : filterCount(q) > 0
+            ? 'No routes match these filters.'
+            : 'No routes yet. Add what the setters put up.';
 
   shell(
     `${header('routes')}
     <main class="list">
-      ${filterBar(
-        f,
-        [
-          ['active', 'All active'],
-          ['project', 'In progress'],
-          ['new', 'Not tried'],
-          ['sent', 'Sent'],
-          ['archived', 'Archived'],
-        ],
-        [
-          ['recent', 'Recent activity'],
-          ['grade', 'By grade'],
-          ['newest', 'Newest first'],
-        ],
-        gradeOptions
-      )}
-      ${mapOverview(visible, f)}
+      ${routeToolbar(q, gradesInUse)}
+      ${mapOverview(visible, q)}
       ${cards || `<p class="empty">${emptyCopy}</p>`}
     </main>
     <a class="fab" href="#/new" aria-label="Add route">+</a>`,
@@ -2562,7 +2773,7 @@ async function renderRoutes(): Promise<void> {
 
   hydratePhotos();
   hydrateSpotlightThumbs(visible, (r) => r.id);
-  wireFilterBar(f, () => void renderRoutes());
+  wireRouteToolbar(q, () => void renderRoutes());
 }
 
 // ---------- route form ----------
@@ -3375,7 +3586,7 @@ async function renderCatalogImport(gymId: string): Promise<void> {
     try {
       const { routes } = await api.importCatalog(gymId, ids);
       setActiveGym(gymId);
-      routeFilters.gym = gymId;
+      routeQuery.gym = gymId;
       toast(`Imported ${routes.length} route${routes.length === 1 ? '' : 's'}`);
       window.location.hash = '#/routes';
     } catch (err) {
@@ -3449,7 +3660,7 @@ async function renderGyms(): Promise<void> {
   document.querySelectorAll<HTMLButtonElement>('[data-gym]').forEach((btn) =>
     btn.addEventListener('click', () => {
       setActiveGym(btn.dataset.gym!);
-      routeFilters.gym = btn.dataset.gym!;
+      routeQuery.gym = btn.dataset.gym!;
       window.location.hash = '#/routes';
     })
   );
