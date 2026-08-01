@@ -99,6 +99,9 @@ export interface RouteWithStats extends Route {
   attempt_count: number;
   send_count: number;
   last_attempted_on: string | null;
+  // When the route went up: the linked catalog climb's set date, falling back
+  // to the earliest logged attempt for hand-entered routes. YYYY-MM-DD.
+  set_at: string | null;
   photo_count: number;
   first_photo_id: string | null;
   image_photo_id: string | null;

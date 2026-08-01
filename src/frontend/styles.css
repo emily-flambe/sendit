@@ -586,6 +586,164 @@ input[type='radio'] {
   padding-bottom: 64px;
 }
 
+/* ---------- routes toolbar, chips and panels ---------- */
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+}
+
+.tool-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--chalk);
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.tool-btn[aria-expanded='true'] {
+  border-color: var(--chalk-dim);
+}
+
+.tool-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--chalk);
+  color: var(--bg);
+  font-size: 12px;
+}
+
+.sort-arrow {
+  font-size: 15px;
+}
+
+/* Active filters stay visible without opening the panel. */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--chalk-faint);
+  color: var(--chalk);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.filter-chip span {
+  color: var(--chalk-dim);
+}
+
+/* `display: flex` below outranks the UA's [hidden] rule, so state it here. */
+.panel[hidden] {
+  display: none;
+}
+
+.panel {
+  margin-top: 8px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.panel-group h4 {
+  margin: 0 0 6px;
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--chalk-dim);
+}
+
+.seg-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.seg-btn {
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--chalk-dim);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.seg-btn.on {
+  background: var(--chalk);
+  border-color: var(--chalk);
+  color: var(--bg);
+}
+
+.panel .chip.on {
+  background: var(--chalk);
+  border-color: var(--chalk);
+  color: var(--bg);
+}
+
+.panel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 4px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  color: var(--chalk);
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.panel-row span {
+  color: var(--chalk-dim);
+  font-size: 13px;
+}
+
+.panel-row.on {
+  font-weight: 600;
+}
+
+.panel .hint {
+  margin: 0;
+}
+
+/* The colour grid is a filter here, not a single-choice picker. */
+.panel .swatches .swatch.active {
+  outline: 2px solid var(--chalk);
+  outline-offset: 2px;
+}
+
 /* ---------- gym floor map ---------- */
 
 .map-field {
