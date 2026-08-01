@@ -611,7 +611,6 @@ input[type='radio'] {
   position: relative;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  overflow: hidden;
   /* The maps are light-on-white artwork, so they need a light backdrop even in
      this dark UI. */
   background: #fff;
@@ -626,6 +625,7 @@ input[type='radio'] {
   width: 100%;
   height: auto;
   display: block;
+  border-radius: calc(var(--radius) - 1px);
 }
 
 .map-pin {
@@ -643,6 +643,64 @@ input[type='radio'] {
   font-size: 15px;
   color: var(--chalk-dim);
   margin: 0 0 6px;
+}
+
+/* ---------- map overview (routes list) ---------- */
+
+.map-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 4px;
+}
+
+.map-panel .section-head h3 {
+  font-size: 15px;
+  color: var(--chalk-dim);
+  margin: 0;
+}
+
+/* Pins on the overview are links, unlike the read-only dot on a route page. */
+.map-pin.link {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.map-pin.link:hover,
+.map-pin.link:focus-visible {
+  transform: scale(1.35);
+  z-index: 2;
+}
+
+.map-tip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  flex-direction: column;
+  gap: 1px;
+  width: max-content;
+  max-width: 44vw;
+  text-align: center;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--chalk);
+  font-size: 13px;
+  line-height: 1.2;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 45%);
+}
+
+.map-pin.link:hover .map-tip,
+.map-pin.link:focus-visible .map-tip {
+  display: flex;
+}
+
+.map-tip span {
+  color: var(--chalk-dim);
+  font-size: 12px;
 }
 
 /* ---------- kaya link picker ---------- */
