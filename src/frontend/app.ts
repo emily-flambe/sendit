@@ -1938,6 +1938,59 @@ function pinFromEvent(figure: HTMLElement, e: MouseEvent): { x: number; y: numbe
   return { x: clamp((e.clientX - r.left) / r.width), y: clamp((e.clientY - r.top) / r.height) };
 }
 
+// Every map that the current filters imply, each with a pin per visible route
+// that has one. Both disciplines show unless the discipline filter narrows it,
+// and a gym only contributes maps it actually has.
+function mapOverview(visible: RouteWithGym[], f: ListFilters): string {
+  const gymIds = f.gym !== 'all' ? [f.gym] : [...new Set(visible.map((r) => r.gym_id))];
+  const disciplines: Discipline[] = f.discipline === 'all' ? ['boulder', 'route'] : [f.discipline as Discipline];
+  const multiGym = gymIds.length > 1;
+
+  const panels = gymIds.flatMap((gymId) => {
+    const gym = gyms.find((g) => g.id === gymId);
+    return disciplines.flatMap((discipline) => {
+      const url = mapUrlFor(gym, discipline);
+      if (!url) return [];
+
+      const onMap = visible.filter(
+        (r) => r.gym_id === gymId && r.discipline === discipline && r.map_x != null && r.map_y != null
+      );
+      const unplaced = visible.filter(
+        (r) => r.gym_id === gymId && r.discipline === discipline && r.map_x == null
+      ).length;
+
+      const pins = onMap
+        .map((r) => {
+          // The auto-generated route name ("blue V4 added on …") is noise here;
+          // what identifies a pin is the grade, the colour and the wall.
+          const head = [r.grade, r.color].filter(Boolean).join(' · ') || 'Route';
+          const sub = [r.wall, STATE_LABELS[routeState(r)]].filter(Boolean).join(' · ');
+          return `<a class="map-pin link" href="#/route/${esc(r.id)}" aria-label="${esc([head, sub].join(' · '))}"
+              style="left:${(r.map_x! * 100).toFixed(2)}%;top:${(r.map_y! * 100).toFixed(2)}%;background:${colorHex(r.color)}">
+              <span class="map-tip"><strong>${esc(head)}</strong>${sub ? `<span>${esc(sub)}</span>` : ''}</span>
+            </a>`;
+        })
+        .join('');
+
+      const heading = multiGym ? `${gym?.name ?? ''} · ${DISCIPLINE_LABELS[discipline]}s` : `${DISCIPLINE_LABELS[discipline]}s`;
+      return [
+        `<section class="map-panel">
+          <div class="section-head">
+            <h3>${esc(heading)}</h3>
+            <span class="hint">${onMap.length} placed${unplaced ? ` · ${unplaced} without a pin` : ''}</span>
+          </div>
+          <div class="map-figure">
+            <img src="${esc(url)}" alt="${esc(heading)} map" />
+            ${pins}
+          </div>
+        </section>`,
+      ];
+    });
+  });
+
+  return panels.length ? `<div class="map-overview">${panels.join('')}</div>` : '';
+}
+
 // ---------- route cards ----------
 
 // The log and the routes list render the same card: a color tape, the route
@@ -2500,6 +2553,7 @@ async function renderRoutes(): Promise<void> {
         ],
         gradeOptions
       )}
+      ${mapOverview(visible, f)}
       ${cards || `<p class="empty">${emptyCopy}</p>`}
     </main>
     <a class="fab" href="#/new" aria-label="Add route">+</a>`,
