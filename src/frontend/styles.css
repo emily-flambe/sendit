@@ -586,6 +586,38 @@ input[type='radio'] {
   padding-bottom: 64px;
 }
 
+/* ---------- discipline pill toggle ---------- */
+
+.pill-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.pill {
+  flex: 1;
+  padding: 9px 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--chalk-dim);
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.pill.on {
+  background: var(--chalk);
+  color: var(--bg);
+}
+
 /* ---------- routes toolbar, chips and panels ---------- */
 
 .toolbar {
@@ -767,6 +799,9 @@ input[type='radio'] {
 
 .map-figure {
   position: relative;
+  width: fit-content;
+  max-width: 100%;
+  margin-inline: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   /* The maps are light-on-white artwork, so they need a light backdrop even in
@@ -780,7 +815,9 @@ input[type='radio'] {
 }
 
 .map-figure img {
-  width: 100%;
+  max-width: 100%;
+  max-height: 210px;
+  width: auto;
   height: auto;
   display: block;
   border-radius: calc(var(--radius) - 1px);
@@ -821,7 +858,20 @@ input[type='radio'] {
 /* Pins on the overview are links, unlike the read-only dot on a route page. */
 .map-pin.link {
   pointer-events: auto;
-  cursor: pointer;
+  cursor: grab;
+  /* Without this a touch-drag scrolls the page instead of moving the pin. */
+  touch-action: none;
+}
+
+.map-pin.link.dragging {
+  cursor: grabbing;
+  transform: scale(1.35);
+  z-index: 3;
+}
+
+/* The label would chase the cursor and obscure the drop point. */
+.map-pin.link.dragging .map-tip {
+  display: none;
 }
 
 .map-pin.link:hover,
