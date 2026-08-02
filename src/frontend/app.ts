@@ -2343,9 +2343,6 @@ function mapOverview(visible: RouteWithGym[], f: { gym: string; discipline: stri
       const onMap = visible.filter(
         (r) => r.gym_id === gymId && r.discipline === discipline && r.map_x != null && r.map_y != null
       );
-      const unplaced = visible.filter(
-        (r) => r.gym_id === gymId && r.discipline === discipline && r.map_x == null
-      ).length;
 
       const pins = onMap
         .map((r) => {
@@ -2368,7 +2365,6 @@ function mapOverview(visible: RouteWithGym[], f: { gym: string; discipline: stri
           <div class="section-head">
             ${heading ? `<h3>${esc(heading)}</h3>` : '<span></span>'}
             <span class="section-actions">
-              <span class="hint">${onMap.length} placed${unplaced ? ` · ${unplaced} without a pin` : ''}</span>
               ${
                 onMap.length
                   ? `<button type="button" class="linkish" data-move-pins="${esc(gymId)}" data-move-disc="${discipline}">Move pins</button>`
@@ -3241,7 +3237,7 @@ async function renderRouteDetail(routeId: string): Promise<void> {
           <span class="attempt-date">${esc(a.attempted_on)}</span>
           ${a.climb_type ? `<span class="attempt-climb">${CLIMB_TYPE_LABELS[a.climb_type]}</span>` : ''}
           ${
-            canFlash
+            isFlash
               ? `<button class="linkish flash-chip ${isFlash ? 'on' : ''}" data-flash-attempt="${esc(a.id)}"
                   data-flashed="${a.flashed}" aria-pressed="${isFlash}">flash</button>`
               : ''
