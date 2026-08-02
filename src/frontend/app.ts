@@ -1924,6 +1924,9 @@ interface RouteQuery {
   sortDir: 'asc' | 'desc';
 }
 
+// What the list last rendered, so the pin mover works from the same set.
+let lastVisibleRoutes: RouteWithGym[] = [];
+
 const routeQuery: RouteQuery = {
   gym: 'all',
   discipline: 'route',
@@ -2093,66 +2096,142 @@ function routeToolbar(q: RouteQuery, gradesInUse: string[]): string {
     </div>`;
 }
 
-// Pins can be dragged to reposition a route, or tapped to open it. A short
-// movement threshold separates the two, so a slightly shaky tap still counts
-// as a tap rather than nudging the pin.
-const DRAG_THRESHOLD_PX = 5;
+// Moving pins happens in its own view rather than inline on the list: on the
+// list a pin is a link, and mixing "drag me" with "tap me" on an 18px target
+// makes both worse.
+function wireMoveButtons(rerender: () => void): void {
+  document.querySelectorAll<HTMLButtonElement>('[data-move-pins]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const gym = gyms.find((g) => g.id === btn.dataset.movePins);
+      const discipline = btn.dataset.moveDisc as Discipline;
+      const url = mapUrlFor(gym, discipline);
+      const pinned = lastVisibleRoutes.filter(
+        (r) => r.gym_id === btn.dataset.movePins && r.discipline === discipline && r.map_x != null && r.map_y != null
+      );
+      if (url && pinned.length) openPinMover(url, pinned, rerender);
+    })
+  );
+}
 
-function wireMapPins(rerender: () => void): void {
-  document.querySelectorAll<HTMLAnchorElement>('.map-pin.link').forEach((pin) => {
-    const figure = pin.closest('.map-figure') as HTMLElement | null;
-    if (!figure) return;
+function openPinMover(url: string, routes: RouteWithGym[], rerender: () => void): void {
+  const { overlay, head, body, foot } = annotOverlay('Move pins');
 
-    pin.addEventListener('pointerdown', (down) => {
-      const startX = down.clientX;
-      const startY = down.clientY;
+  // Working copy; nothing is written until Save.
+  const pos = new Map(routes.map((r) => [r.id, { x: r.map_x!, y: r.map_y! }]));
+  const undo: { id: string; from: { x: number; y: number }; to: { x: number; y: number } }[] = [];
+  const redo: typeof undo = [];
+
+  const figure = document.createElement('div');
+  figure.className = 'map-figure pin-mover';
+  const img = document.createElement('img');
+  img.src = url;
+  img.alt = 'Gym floor map';
+  figure.appendChild(img);
+  body.appendChild(figure);
+
+  const dots = new Map<string, HTMLElement>();
+  for (const r of routes) {
+    const dot = document.createElement('span');
+    dot.className = 'map-pin drag';
+    dot.style.background = colorHex(r.color);
+    const head_ = [r.grade, r.color].filter(Boolean).join(' · ') || 'Route';
+    const sub = [r.wall, STATE_LABELS[routeState(r)]].filter(Boolean).join(' · ');
+    dot.innerHTML = `<span class="map-tip"><strong>${esc(head_)}</strong>${sub ? `<span>${esc(sub)}</span>` : ''}</span>`;
+    figure.appendChild(dot);
+    dots.set(r.id, dot);
+  }
+
+  const draw = () => {
+    for (const [id, p] of pos) {
+      const dot = dots.get(id)!;
+      dot.style.left = `${(p.x * 100).toFixed(2)}%`;
+      dot.style.top = `${(p.y * 100).toFixed(2)}%`;
+    }
+    undoBtn.disabled = undo.length === 0;
+    redoBtn.disabled = redo.length === 0;
+    saveBtn.disabled = undo.length === 0 && redo.length === 0;
+  };
+
+  for (const [id, dot] of dots) {
+    dot.addEventListener('pointerdown', (down) => {
+      down.preventDefault();
+      const from = { ...pos.get(id)! };
       let moved = false;
-
-      // Tracked on the window rather than the pin: the cursor leaves an 18px
-      // dot almost immediately, and pointer capture proved unreliable here.
+      // Listeners live on the window: the cursor leaves an 18px dot instantly.
       const onMove = (e: PointerEvent) => {
-        if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD_PX) return;
         moved = true;
-        pin.classList.add('dragging');
-        const p = pinFromEvent(figure, e);
-        pin.style.left = `${(p.x * 100).toFixed(2)}%`;
-        pin.style.top = `${(p.y * 100).toFixed(2)}%`;
-        e.preventDefault();
+        dot.classList.add('dragging');
+        pos.set(id, pinFromEvent(figure, e));
+        draw();
       };
-
-      const stop = () => {
+      const onUp = () => {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
-        window.removeEventListener('pointercancel', onCancel);
+        dot.classList.remove('dragging');
+        if (!moved) return;
+        undo.push({ id, from, to: { ...pos.get(id)! } });
+        redo.length = 0; // a new move invalidates the redo branch
+        draw();
       };
-
-      const onUp = (e: PointerEvent) => {
-        stop();
-        if (!moved) return; // a tap — the anchor navigates on its own
-        const p = pinFromEvent(figure, e);
-        void api
-          .updateRoute(pin.dataset.route!, { map_x: p.x, map_y: p.y })
-          .catch(fail)
-          .finally(rerender);
-      };
-
-      // A cancelled pointer carries no usable position; abandon and redraw.
-      const onCancel = () => {
-        stop();
-        if (moved) rerender();
-      };
-
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
-      window.addEventListener('pointercancel', onCancel);
-
-      // Suppress the click that follows a drag so it doesn't open the route.
-      pin.addEventListener('click', function guard(e) {
-        pin.removeEventListener('click', guard);
-        if (moved) e.preventDefault();
-      });
     });
+  }
+
+  const button = (label: string, cls: string) => {
+    const b = document.createElement('button');
+    b.className = cls;
+    b.textContent = label;
+    return b;
+  };
+  const undoBtn = button('Undo', 'btn ghost');
+  const redoBtn = button('Redo', 'btn ghost');
+  const cancelBtn = button('Cancel', 'btn ghost');
+  const saveBtn = button('Save', 'btn primary');
+
+  undoBtn.addEventListener('click', () => {
+    const step = undo.pop();
+    if (!step) return;
+    pos.set(step.id, { ...step.from });
+    redo.push(step);
+    draw();
   });
+  redoBtn.addEventListener('click', () => {
+    const step = redo.pop();
+    if (!step) return;
+    pos.set(step.id, { ...step.to });
+    undo.push(step);
+    draw();
+  });
+  cancelBtn.addEventListener('click', () => overlay.remove());
+  head.prepend(cancelBtn.cloneNode(true) as HTMLButtonElement);
+  (head.firstChild as HTMLButtonElement).addEventListener('click', () => overlay.remove());
+
+  saveBtn.addEventListener('click', async () => {
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+    // Only the pins that actually ended up somewhere new.
+    const changed = routes.filter((r) => {
+      const p = pos.get(r.id)!;
+      return p.x !== r.map_x || p.y !== r.map_y;
+    });
+    try {
+      for (const r of changed) {
+        const p = pos.get(r.id)!;
+        await api.updateRoute(r.id, { map_x: p.x, map_y: p.y });
+      }
+      toast(`Moved ${changed.length} pin${changed.length === 1 ? '' : 's'}`);
+      overlay.remove();
+      rerender();
+    } catch (err) {
+      fail(err);
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save';
+    }
+  });
+
+  foot.append(undoBtn, redoBtn, cancelBtn, saveBtn);
+  draw();
 }
 
 function wireRouteToolbar(q: RouteQuery, rerender: () => void): void {
@@ -2288,7 +2367,14 @@ function mapOverview(visible: RouteWithGym[], f: { gym: string; discipline: stri
         `<section class="map-panel">
           <div class="section-head">
             ${heading ? `<h3>${esc(heading)}</h3>` : '<span></span>'}
-            <span class="hint">${onMap.length} placed${unplaced ? ` · ${unplaced} without a pin` : ''}</span>
+            <span class="section-actions">
+              <span class="hint">${onMap.length} placed${unplaced ? ` · ${unplaced} without a pin` : ''}</span>
+              ${
+                onMap.length
+                  ? `<button type="button" class="linkish" data-move-pins="${esc(gymId)}" data-move-disc="${discipline}">Move pins</button>`
+                  : ''
+              }
+            </span>
           </div>
           <div class="map-figure">
             <img src="${esc(url)}" alt="${esc(heading)} map" />
@@ -2791,6 +2877,7 @@ async function renderRoutes(): Promise<void> {
   q.grades = q.grades.filter((g) => gradesInUse.includes(g));
 
   const visible = sortRoutes(routes.filter((r) => matchesQuery(r, q)), q);
+  lastVisibleRoutes = visible;
 
   const cards = visible
     .map((r) => {
@@ -2846,7 +2933,7 @@ async function renderRoutes(): Promise<void> {
   hydratePhotos();
   hydrateSpotlightThumbs(visible, (r) => r.id);
   wireRouteToolbar(q, () => void renderRoutes());
-  wireMapPins(() => void renderRoutes());
+  wireMoveButtons(() => void renderRoutes());
 }
 
 // ---------- route form ----------
