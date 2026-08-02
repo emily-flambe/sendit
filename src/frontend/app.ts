@@ -1914,7 +1914,9 @@ function wireFilterBar(f: ListFilters, rerender: () => void): void {
 // chips) plus a separate sort control with an explicit direction.
 interface RouteQuery {
   gym: string;
-  discipline: string;
+  // Not a filter: the page is always in one mode or the other, chosen by the
+  // pill toggle. Ropes by default.
+  discipline: Discipline;
   status: string;
   colors: string[];
   grades: string[];
@@ -1924,7 +1926,7 @@ interface RouteQuery {
 
 const routeQuery: RouteQuery = {
   gym: 'all',
-  discipline: 'all',
+  discipline: 'route',
   status: 'active',
   colors: [],
   grades: [],
@@ -1952,7 +1954,7 @@ const STATUS_OPTIONS: [string, string][] = [
 
 function matchesQuery(r: RouteWithGym, q: RouteQuery): boolean {
   if (q.gym !== 'all' && r.gym_id !== q.gym) return false;
-  if (q.discipline !== 'all' && r.discipline !== q.discipline) return false;
+  if (r.discipline !== q.discipline) return false;
   if (q.colors.length && !q.colors.includes(r.color.trim().toLowerCase())) return false;
   if (q.grades.length && !q.grades.includes(r.grade.trim())) return false;
   if (q.status === 'archived') return r.archived === 1;
@@ -1984,7 +1986,6 @@ function sortRoutes(routes: RouteWithGym[], q: RouteQuery): RouteWithGym[] {
 function activeFilterChips(q: RouteQuery, gradesInUse: string[]): string {
   const chips: { label: string; clear: string }[] = [];
   if (q.gym !== 'all') chips.push({ label: gyms.find((g) => g.id === q.gym)?.name ?? 'Gym', clear: 'gym' });
-  if (q.discipline !== 'all') chips.push({ label: `${DISCIPLINE_LABELS[q.discipline as Discipline]}s`, clear: 'discipline' });
   if (q.status !== 'active') chips.push({ label: STATUS_OPTIONS.find(([v]) => v === q.status)?.[1] ?? q.status, clear: 'status' });
   for (const c of q.colors) chips.push({ label: c, clear: `color:${c}` });
   if (q.grades.length) {
@@ -2009,11 +2010,21 @@ function activeFilterChips(q: RouteQuery, gradesInUse: string[]): string {
 function filterCount(q: RouteQuery): number {
   return (
     (q.gym !== 'all' ? 1 : 0) +
-    (q.discipline !== 'all' ? 1 : 0) +
     (q.status !== 'active' ? 1 : 0) +
     q.colors.length +
     q.grades.length
   );
+}
+
+// The page shows one discipline at a time; this is how you switch, and it sits
+// above everything else because it changes what the whole page is about.
+function disciplinePills(q: RouteQuery): string {
+  const pill = (d: Discipline, label: string) =>
+    `<button type="button" class="pill${q.discipline === d ? ' on' : ''}" data-disc="${d}"
+       aria-pressed="${q.discipline === d}">${label}</button>`;
+  return `<div class="pill-toggle" role="group" aria-label="Climb type">
+      ${pill('route', 'Routes')}${pill('boulder', 'Boulders')}
+    </div>`;
 }
 
 function routeToolbar(q: RouteQuery, gradesInUse: string[]): string {
@@ -2053,13 +2064,6 @@ function routeToolbar(q: RouteQuery, gradesInUse: string[]): string {
               </div></div>`
           : ''
       }
-      <div class="panel-group"><h4>Activity</h4>
-        <div class="seg-wrap">
-          <button type="button" class="seg-btn${q.discipline === 'all' ? ' on' : ''}" data-disc="all">All</button>
-          <button type="button" class="seg-btn${q.discipline === 'boulder' ? ' on' : ''}" data-disc="boulder">Boulders</button>
-          <button type="button" class="seg-btn${q.discipline === 'route' ? ' on' : ''}" data-disc="route">Routes</button>
-        </div>
-      </div>
       <div class="panel-group"><h4>Colour</h4>
         <div class="swatches">
           ${colorsInUse
@@ -2087,6 +2091,68 @@ function routeToolbar(q: RouteQuery, gradesInUse: string[]): string {
         </div>
       </div>
     </div>`;
+}
+
+// Pins can be dragged to reposition a route, or tapped to open it. A short
+// movement threshold separates the two, so a slightly shaky tap still counts
+// as a tap rather than nudging the pin.
+const DRAG_THRESHOLD_PX = 5;
+
+function wireMapPins(rerender: () => void): void {
+  document.querySelectorAll<HTMLAnchorElement>('.map-pin.link').forEach((pin) => {
+    const figure = pin.closest('.map-figure') as HTMLElement | null;
+    if (!figure) return;
+
+    pin.addEventListener('pointerdown', (down) => {
+      const startX = down.clientX;
+      const startY = down.clientY;
+      let moved = false;
+
+      // Tracked on the window rather than the pin: the cursor leaves an 18px
+      // dot almost immediately, and pointer capture proved unreliable here.
+      const onMove = (e: PointerEvent) => {
+        if (!moved && Math.hypot(e.clientX - startX, e.clientY - startY) < DRAG_THRESHOLD_PX) return;
+        moved = true;
+        pin.classList.add('dragging');
+        const p = pinFromEvent(figure, e);
+        pin.style.left = `${(p.x * 100).toFixed(2)}%`;
+        pin.style.top = `${(p.y * 100).toFixed(2)}%`;
+        e.preventDefault();
+      };
+
+      const stop = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onCancel);
+      };
+
+      const onUp = (e: PointerEvent) => {
+        stop();
+        if (!moved) return; // a tap — the anchor navigates on its own
+        const p = pinFromEvent(figure, e);
+        void api
+          .updateRoute(pin.dataset.route!, { map_x: p.x, map_y: p.y })
+          .catch(fail)
+          .finally(rerender);
+      };
+
+      // A cancelled pointer carries no usable position; abandon and redraw.
+      const onCancel = () => {
+        stop();
+        if (moved) rerender();
+      };
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onCancel);
+
+      // Suppress the click that follows a drag so it doesn't open the route.
+      pin.addEventListener('click', function guard(e) {
+        pin.removeEventListener('click', guard);
+        if (moved) e.preventDefault();
+      });
+    });
+  });
 }
 
 function wireRouteToolbar(q: RouteQuery, rerender: () => void): void {
@@ -2124,7 +2190,10 @@ function wireRouteToolbar(q: RouteQuery, rerender: () => void): void {
       q.sortDir = 'desc';
     }
   });
-  pick<HTMLButtonElement>('[data-disc]', (el) => { q.discipline = el.dataset.disc!; });
+  pick<HTMLButtonElement>('[data-disc]', (el) => {
+    q.discipline = el.dataset.disc as Discipline;
+    q.grades = [];
+  });
   pick<HTMLButtonElement>('[data-status]', (el) => { q.status = el.dataset.status!; });
   pick<HTMLButtonElement>('[data-gym-filter]', (el) => { q.gym = el.dataset.gymFilter!; });
   pick<HTMLButtonElement>('[data-color-filter]', (el) => {
@@ -2139,12 +2208,11 @@ function wireRouteToolbar(q: RouteQuery, rerender: () => void): void {
     const what = el.dataset.clear!;
     if (what === 'all') {
       openPanel = null;
-      q.gym = 'all'; q.discipline = 'all'; q.status = 'active'; q.colors = []; q.grades = [];
+      q.gym = 'all'; q.status = 'active'; q.colors = []; q.grades = [];
     } else if (what.startsWith('color:')) {
       q.colors = q.colors.filter((c) => c !== what.slice(6));
     } else if (what === 'grades') q.grades = [];
     else if (what === 'gym') q.gym = 'all';
-    else if (what === 'discipline') q.discipline = 'all';
     else if (what === 'status') q.status = 'active';
   });
 }
@@ -2206,18 +2274,20 @@ function mapOverview(visible: RouteWithGym[], f: { gym: string; discipline: stri
           // what identifies a pin is the grade, the colour and the wall.
           const head = [r.grade, r.color].filter(Boolean).join(' · ') || 'Route';
           const sub = [r.wall, STATE_LABELS[routeState(r)]].filter(Boolean).join(' · ');
-          return `<a class="map-pin link" href="#/route/${esc(r.id)}" aria-label="${esc([head, sub].join(' · '))}"
+          return `<a class="map-pin link" href="#/route/${esc(r.id)}" data-route="${esc(r.id)}" aria-label="${esc([head, sub].join(' · '))}"
               style="left:${(r.map_x! * 100).toFixed(2)}%;top:${(r.map_y! * 100).toFixed(2)}%;background:${colorHex(r.color)}">
               <span class="map-tip"><strong>${esc(head)}</strong>${sub ? `<span>${esc(sub)}</span>` : ''}</span>
             </a>`;
         })
         .join('');
 
-      const heading = multiGym ? `${gym?.name ?? ''} · ${DISCIPLINE_LABELS[discipline]}s` : `${DISCIPLINE_LABELS[discipline]}s`;
+      // The pill toggle already says which discipline this is, so the panel
+      // only needs a heading when several gyms are in play.
+      const heading = multiGym ? gym?.name ?? '' : '';
       return [
         `<section class="map-panel">
           <div class="section-head">
-            <h3>${esc(heading)}</h3>
+            ${heading ? `<h3>${esc(heading)}</h3>` : '<span></span>'}
             <span class="hint">${onMap.length} placed${unplaced ? ` · ${unplaced} without a pin` : ''}</span>
           </div>
           <div class="map-figure">
@@ -2714,9 +2784,10 @@ async function renderRoutes(): Promise<void> {
 
   // Grades are freetext, so offer only the ones actually in use, easiest first.
   // Built from every route so the option list stays stable as filters change.
-  const gradesInUse = [...new Set(routes.map((r) => r.grade.trim()).filter(Boolean))].sort(
-    (a, b) => gradeRank(a) - gradeRank(b)
-  );
+  // Scoped to the current discipline: V-scale chips are noise on the ropes tab.
+  const gradesInUse = [
+    ...new Set(routes.filter((r) => r.discipline === q.discipline).map((r) => r.grade.trim()).filter(Boolean)),
+  ].sort((a, b) => gradeRank(a) - gradeRank(b));
   q.grades = q.grades.filter((g) => gradesInUse.includes(g));
 
   const visible = sortRoutes(routes.filter((r) => matchesQuery(r, q)), q);
@@ -2758,11 +2829,12 @@ async function renderRoutes(): Promise<void> {
           ? 'Nothing in progress. Go fall off something.'
           : filterCount(q) > 0
             ? 'No routes match these filters.'
-            : 'No routes yet. Add what the setters put up.';
+            : `No ${q.discipline === 'boulder' ? 'boulders' : 'routes'} yet. Add what the setters put up.`;
 
   shell(
     `${header('routes')}
     <main class="list">
+      ${disciplinePills(q)}
       ${routeToolbar(q, gradesInUse)}
       ${mapOverview(visible, q)}
       ${cards || `<p class="empty">${emptyCopy}</p>`}
@@ -2774,6 +2846,7 @@ async function renderRoutes(): Promise<void> {
   hydratePhotos();
   hydrateSpotlightThumbs(visible, (r) => r.id);
   wireRouteToolbar(q, () => void renderRoutes());
+  wireMapPins(() => void renderRoutes());
 }
 
 // ---------- route form ----------
