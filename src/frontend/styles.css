@@ -859,24 +859,42 @@ input[type='radio'] {
 /* Pins on the overview are links, unlike the read-only dot on a route page. */
 .map-pin.link {
   pointer-events: auto;
+  cursor: pointer;
+}
+
+/* ---------- pin mover ---------- */
+
+.map-pin.drag {
+  pointer-events: auto;
   cursor: grab;
   /* Without this a touch-drag scrolls the page instead of moving the pin. */
   touch-action: none;
 }
 
-.map-pin.link.dragging {
+.map-pin.drag.dragging {
   cursor: grabbing;
   transform: scale(1.35);
   z-index: 3;
 }
 
-/* The label would chase the cursor and obscure the drop point. */
-.map-pin.link.dragging .map-tip {
+/* The label would chase the cursor and hide the drop point. */
+.map-pin.drag.dragging .map-tip {
   display: none;
 }
 
+.map-figure.pin-mover img {
+  width: auto;
+  max-width: 100%;
+  max-height: calc(100dvh - 150px);
+}
+
+.annot-editor-foot .btn {
+  flex: 1;
+}
+
 .map-pin.link:hover,
-.map-pin.link:focus-visible {
+.map-pin.link:focus-visible,
+.map-pin.drag:hover {
   transform: scale(1.35);
   z-index: 2;
 }
@@ -903,7 +921,8 @@ input[type='radio'] {
 }
 
 .map-pin.link:hover .map-tip,
-.map-pin.link:focus-visible .map-tip {
+.map-pin.link:focus-visible .map-tip,
+.map-pin.drag:hover .map-tip {
   display: flex;
 }
 

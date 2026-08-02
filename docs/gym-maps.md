@@ -6,7 +6,7 @@ A gym can carry a floor map per discipline, and each route can hold a hand-place
 
 `gyms.map_boulder_url` and `gyms.map_route_url` hold an image URL each. A gym with neither set shows no map anywhere, so this stays invisible for gyms that don't have one.
 
-The routes list shows one map at a time, chosen by the Routes/Boulders pill toggle at the top of the page; the whole page follows that toggle, so you only ever see one discipline at once. Pins there can be dragged to reposition a route, or tapped to open it — a short movement threshold separates the two, and drags are tracked on the window rather than via pointer capture, which doesn't hold reliably for an 18px target.
+The routes list shows one map at a time, chosen by the Routes/Boulders pill toggle at the top of the page; the whole page follows that toggle, so you only ever see one discipline at once. Pins there are links: tapping one opens its route. Repositioning happens behind the **Move pins** button, which opens the map full-screen with the pins draggable and not clickable, plus undo, redo, cancel and save. Nothing is written until you save, and only the pins that actually moved are updated. Drags are tracked on `window` rather than through pointer capture, which doesn't hold for an 18px target.
 
 The route form picks the map matching the route's discipline and lets you tap to place a pin, drawn in the route's colour. Changing the gym or the discipline clears the pin, since it no longer refers to the same picture. The route detail page shows the map read-only when a pin is set.
 
