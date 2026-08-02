@@ -3,6 +3,8 @@ dist/
 .wrangler/
 .dev.vars
 .env*
+*.pem
+*.key
 *.log
 .DS_Store
 test-results/

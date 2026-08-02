@@ -29,6 +29,68 @@ test('register, add a gym, log a flash, and see it everywhere', async ({ page })
   await page.click('.log-entry');
   await expect(page.locator('.route-hero .state').first()).toHaveText('flashed');
   await expect(page.locator('.history .attempt-result')).toHaveText('FLASH');
+  await expect(page.locator('.history .flash-chip.on[aria-pressed="true"]')).toHaveText('flash');
+});
+
+test('does not label an unmarked first send as a flash', async ({ page }) => {
+  const username = `e2e_${Date.now()}_plain_send`;
+
+  await page.goto('/');
+  await page.fill('input[name=username]', username);
+  await page.fill('input[name=password]', 'password123');
+  await page.click('button[data-mode=register]');
+
+  await page.fill('#gym-form input[name=name]', 'E2E Plain Send Gym');
+  await page.click('#gym-form button[type=submit]');
+  await page.click('nav a[href="#/"]');
+  await page.click('a[href="#/log/new"]');
+  await page.fill('input[name=grade]', 'V3');
+  await page.click('#log-form button[type=submit]');
+
+  await page.click('.log-entry');
+  await expect(page.locator('.route-hero .state').first()).toHaveText('sent');
+  await expect(page.locator('.history .attempt-result')).toHaveText('SENT');
+  await expect(page.locator('.history .flash-chip')).toHaveCount(0);
+  await expect(page.locator('.history')).not.toContainText(/FLASH/i);
+});
+
+test('routes map omits pin count indicators', async ({ page }) => {
+  const username = `e2e_${Date.now()}_map_counts`;
+
+  await page.goto('/');
+  await page.fill('input[name=username]', username);
+  await page.fill('input[name=password]', 'password123');
+  await page.click('button[data-mode=register]');
+
+  await page.fill('#gym-form input[name=name]', 'E2E Map Count Gym');
+  await page.click('#gym-form button[type=submit]');
+
+  await page.evaluate(async () => {
+    const token = localStorage.getItem('sendit_token');
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const { gyms } = await (await fetch('/api/gyms', { headers })).json();
+    const gymId = gyms[0].id;
+    const call = async (method: string, path: string, body: unknown) => {
+      const res = await fetch(`/api${path}`, { method, headers, body: JSON.stringify(body) });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return res.json();
+    };
+
+    await call('PATCH', `/gyms/${gymId}`, { map_route_url: '/maps/routes.png' });
+    await call('POST', `/gyms/${gymId}/routes`, {
+      name: 'Pinned route',
+      discipline: 'route',
+      map_x: 0.25,
+      map_y: 0.5,
+    });
+    await call('POST', `/gyms/${gymId}/routes`, { name: 'Unpinned route', discipline: 'route' });
+  });
+
+  await page.reload();
+  await expect(page.locator('.map-panel .map-pin')).toHaveCount(1);
+  await expect(page.locator('.map-panel [data-move-pins]')).toBeVisible();
+  await expect(page.locator('.map-panel .section-head .hint')).toHaveCount(0);
+  await expect(page.locator('.map-panel')).not.toContainText(/placed|without a pin/i);
 });
 
 test('climb-type toggle only shows for roped climbs on the log form', async ({ page }) => {
