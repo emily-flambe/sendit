@@ -3151,9 +3151,15 @@ async function renderKayaLink(route: Route, rerender: () => void): Promise<void>
     return;
   }
 
-  // Unclaimed climbs of the same kind. Offering a rope route as a candidate for
-  // a boulder is never right, so that's filtered rather than left to the search.
-  const free = catalog.filter((e) => !e.imported_route_id && e.discipline === route.discipline);
+  const selectedColor = route.color.trim().toLowerCase();
+  const selectedGrade = route.grade.trim().toLowerCase();
+  const free = catalog.filter(
+    (e) =>
+      !e.imported_route_id &&
+      e.discipline === route.discipline &&
+      (!selectedColor || e.color.trim().toLowerCase() === selectedColor) &&
+      (!selectedGrade || e.grade.trim().toLowerCase() === selectedGrade)
+  );
   if (free.length === 0) {
     host.remove();
     return;

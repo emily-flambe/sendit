@@ -93,6 +93,57 @@ test('routes map omits pin count indicators', async ({ page }) => {
   await expect(page.locator('.map-panel')).not.toContainText(/placed|without a pin/i);
 });
 
+test('KAYA suggestions follow route color and grade through create and edit', async ({ page }) => {
+  const username = `e2e_${Date.now()}_kaya_filter`;
+  const catalog = [
+    { id: 'kaya:blue-v4', grade: 'v4', color: 'blue', wall: 'Blue V4 Wall', discipline: 'boulder', imported_route_id: null },
+    { id: 'kaya:blue-v5', grade: 'v5', color: 'blue', wall: 'Blue V5 Wall', discipline: 'boulder', imported_route_id: null },
+    { id: 'kaya:red-v4', grade: 'v4', color: 'red', wall: 'Red V4 Wall', discipline: 'boulder', imported_route_id: null },
+    { id: 'kaya:red-v5', grade: 'v5', color: 'red', wall: 'Red V5 Wall', discipline: 'boulder', imported_route_id: null },
+    { id: 'kaya:rope-blue-v4', grade: 'v4', color: 'blue', wall: 'Rope Wall', discipline: 'route', imported_route_id: null },
+    { id: 'kaya:claimed-blue-v4', grade: 'v4', color: 'blue', wall: 'Claimed Wall', discipline: 'boulder', imported_route_id: 'claimed-route' },
+  ].map((entry, i) => ({ ...entry, source_updated_at: `2026-07-${String(i + 1).padStart(2, '0')}T12:00:00.000Z` }));
+
+  await page.goto('/');
+  await page.fill('input[name=username]', username);
+  await page.fill('input[name=password]', 'password123');
+  await page.click('button[data-mode=register]');
+
+  await page.fill('#gym-form input[name=name]', 'E2E KAYA Filter Gym');
+  await page.click('#gym-form button[type=submit]');
+  await page.route(/\/api\/gyms\/[^/]+\/catalog$/, (route) => route.fulfill({ json: { catalog } }));
+  await page.evaluate(async () => {
+    const token = localStorage.getItem('sendit_token');
+    const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const { gyms } = await (await fetch('/api/gyms', { headers })).json();
+    const res = await fetch(`/api/gyms/${gyms[0].id}`, {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ catalog_source: 'kaya', catalog_gym_id: '211' }),
+    });
+    if (!res.ok) throw new Error(`gym catalog link: ${res.status}`);
+  });
+
+  await page.reload();
+  await page.click('.fab');
+  await page.selectOption('#route-form select[name=discipline]', 'boulder');
+  await page.click('#route-form [data-color=blue]');
+  await page.locator('#grade-chips .chip', { hasText: 'V4' }).click();
+  await page.click('#route-form button[type=submit]');
+
+  await expect(page).toHaveURL(/#\/route\/[\w-]+$/);
+  await expect(page.locator('#kaya-options [data-pick]')).toHaveCount(1);
+  await expect(page.locator('[data-pick="kaya:blue-v4"]')).toBeVisible();
+
+  await page.click('.edit-link');
+  await page.click('#route-form [data-color=red]');
+  await page.locator('#grade-chips .chip', { hasText: 'V5' }).click();
+  await page.click('#route-form button[type=submit]');
+
+  await expect(page.locator('#kaya-options [data-pick]')).toHaveCount(1);
+  await expect(page.locator('[data-pick="kaya:red-v5"]')).toBeVisible();
+});
+
 test('climb-type toggle only shows for roped climbs on the log form', async ({ page }) => {
   const username = `e2e_${Date.now()}_seg`;
 
