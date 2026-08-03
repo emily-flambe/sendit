@@ -11,7 +11,8 @@
     "test:migrations": "node --test 'test/**/*.test.mjs'",
     "test:watch": "mkdir -p dist && vitest",
     "test:e2e": "playwright test",
-    "e2e:server": "npm run build:frontend && wrangler d1 migrations apply sendit-db --local --persist-to .wrangler/e2e && wrangler dev --port 8799 --persist-to .wrangler/e2e --var JWT_SECRET:e2e-secret",
+    "e2e:seed": "wrangler d1 execute sendit-db --local --persist-to .wrangler/e2e --file e2e/catalog-fixtures.sql",
+    "e2e:server": "npm run build:frontend && wrangler d1 migrations apply sendit-db --local --persist-to .wrangler/e2e && npm run e2e:seed && wrangler dev --port 8799 --persist-to .wrangler/e2e --var JWT_SECRET:e2e-secret",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.frontend.json",
     "db:migrate:local": "wrangler d1 migrations apply sendit-db --local",
     "db:migrate:remote": "wrangler d1 migrations apply sendit-db --remote"
