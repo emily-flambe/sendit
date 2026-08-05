@@ -51,15 +51,21 @@ function esc(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+// Tape colours as gyms name them. The spellings with a space or an abbreviation
+// ("dk green") are KAYA's, kept verbatim so an imported route's colour matches
+// the tag on the wall.
 const NAMED_COLORS: Record<string, string> = {
   red: '#d94f3d',
   orange: '#e8853c',
   yellow: '#e3c145',
+  lime: '#a8c93a',
   green: '#5da35c',
+  'dk green': '#2f6b3f',
+  teal: '#4aa8a0',
   blue: '#4a8bc9',
   purple: '#9268bd',
   pink: '#d9749f',
-  teal: '#4aa8a0',
+  brown: '#8a5a3c',
   white: '#e8e4da',
   black: '#3a3835',
   gray: '#8b8680',
@@ -105,7 +111,7 @@ function climbTypeSeg(selected: ClimbType = 'top_rope'): string {
   return `<div class="seg climb-seg">${opts}</div>`;
 }
 
-const BOULDER_GRADES = ['VB', 'V0', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8'];
+const BOULDER_GRADES = ['VB', 'V0', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9', 'V10', 'V11'];
 const ROPE_GRADES = [
   '5.8',
   '5.9',
@@ -3752,6 +3758,10 @@ async function renderCatalogImport(gymId: string): Promise<void> {
   });
 }
 
+// Which gym, if any, has the "add a KAYA gym" panel open. Lives outside the
+// render so re-rendering the screen keeps the panel where the user opened it.
+let addCatalogForGym: string | null = null;
+
 async function renderGyms(): Promise<void> {
   let sources: CatalogSource[] = [];
   try {
@@ -3762,30 +3772,61 @@ async function renderGyms(): Promise<void> {
     return;
   }
 
-  // A gym linked to a catalog gets an import link; an unlinked one gets a
-  // picker, but only if the sync has actually populated a catalog to offer.
+  const bySlug = new Map(sources.map((s) => [`${s.source}:${s.slug}`, s]));
+
+  // A gym linked to a catalog gets an import link; an unlinked one gets a picker
+  // of known catalogs plus the option to name a new KAYA gym. A catalog only the
+  // sync can fill says so, since it stays empty for a few minutes.
   const catalogControl = (g: Gym): string => {
-    if (g.catalog_source && g.catalog_gym_id) {
+    if (g.catalog_source && g.catalog_gym_slug) {
+      const source = bySlug.get(`${g.catalog_source}:${g.catalog_gym_slug}`);
+      let state = '';
+      if (source?.status === 'error') {
+        state = `<span class="state state-warn" title="${esc(source.error)}">catalog failed</span>`;
+      } else if (source && source.climb_count === 0) {
+        state = '<span class="state">syncing…</span>';
+      }
       return `<span class="gym-catalog">
+        ${state}
         <a class="linkish" href="#/gym/${esc(g.id)}/import">import routes</a>
         <button class="linkish dim" data-unlink="${esc(g.id)}">unlink</button>
       </span>`;
     }
-    if (sources.length === 0) return '';
     return `<span class="gym-catalog">
       <select class="catalog-pick" data-link="${esc(g.id)}">
         <option value="">link a route catalog…</option>
         ${sources
           .map(
             (s) =>
-              `<option value="${esc(`${s.source}:${s.source_gym_id}`)}">
-                 ${esc(s.source_gym_name || s.source_gym_id)} (${s.climb_count})
+              `<option value="${esc(`${s.source}:${s.slug}`)}">
+                 ${esc(s.source_gym_name)} (${s.climb_count})
                </option>`
           )
           .join('')}
+        <option value="+">+ add a KAYA gym by slug…</option>
       </select>
     </span>`;
   };
+
+  // Shown under the gym that asked for it. KAYA has no gym search, so the slug
+  // out of the gym's own URL is the only way to name one.
+  const addPanel = (gymId: string): string => `
+    <li class="catalog-add">
+      <form id="catalog-add-form">
+        <p class="hint">
+          Open <a href="https://kayaclimb.com" target="_blank" rel="noreferrer">kayaclimb.com</a>,
+          find your gym, and copy the last part of its address:<br />
+          <code>kayaclimb.com/gym/<strong>thespotboulder</strong></code>
+        </p>
+        <div class="inline-form">
+          <input name="slug" placeholder="thespotboulder" required maxlength="120"
+                 autocapitalize="off" autocorrect="off" spellcheck="false" />
+          <button type="submit" class="btn primary">Add</button>
+          <button type="button" class="linkish dim" id="catalog-add-cancel">cancel</button>
+        </div>
+        <input type="hidden" name="gym" value="${esc(gymId)}" />
+      </form>
+    </li>`;
 
   const items = gyms
     .map(
@@ -3796,7 +3837,7 @@ async function renderGyms(): Promise<void> {
         </button>
         <button class="linkish" data-rename="${esc(g.id)}">rename</button>
         ${catalogControl(g)}
-      </li>`
+      </li>${addCatalogForGym === g.id ? addPanel(g.id) : ''}`
     )
     .join('');
 
@@ -3824,9 +3865,14 @@ async function renderGyms(): Promise<void> {
   document.querySelectorAll<HTMLSelectElement>('[data-link]').forEach((sel) =>
     sel.addEventListener('change', async () => {
       if (!sel.value) return;
-      const [source, catalogGymId] = sel.value.split(':');
+      if (sel.value === '+') {
+        addCatalogForGym = sel.dataset.link!;
+        void renderGyms();
+        return;
+      }
+      const [source, slug] = sel.value.split(':');
       try {
-        await api.updateGym(sel.dataset.link!, { catalog_source: source, catalog_gym_id: catalogGymId });
+        await api.updateGym(sel.dataset.link!, { catalog_source: source, catalog_gym_slug: slug });
         window.location.hash = `#/gym/${sel.dataset.link}/import`;
       } catch (err) {
         fail(err);
@@ -3834,11 +3880,39 @@ async function renderGyms(): Promise<void> {
     })
   );
 
+  document.getElementById('catalog-add-cancel')?.addEventListener('click', () => {
+    addCatalogForGym = null;
+    void renderGyms();
+  });
+
+  document.getElementById('catalog-add-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.currentTarget as HTMLFormElement;
+    const slug = (form.elements.namedItem('slug') as HTMLInputElement).value.trim().toLowerCase();
+    const gymId = (form.elements.namedItem('gym') as HTMLInputElement).value;
+    if (!slug) return;
+    try {
+      // Linking straight away, before the climbs land: the catalog is this gym's
+      // whether the pull takes two minutes or waits for tonight's run.
+      const { sync } = await api.addCatalogGym(slug);
+      await api.updateGym(gymId, { catalog_source: 'kaya', catalog_gym_slug: slug });
+      addCatalogForGym = null;
+      await renderGyms();
+      toast(
+        sync.started
+          ? `Syncing ${slug}. Its climbs show up here in a few minutes — reload to check.`
+          : `Added ${slug}. Its climbs arrive with the next nightly sync.`
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
   document.querySelectorAll<HTMLButtonElement>('[data-unlink]').forEach((btn) =>
     btn.addEventListener('click', async () => {
       try {
         // Unlinking only drops the catalog pointer; routes already imported stay.
-        await api.updateGym(btn.dataset.unlink!, { catalog_source: '', catalog_gym_id: '' });
+        await api.updateGym(btn.dataset.unlink!, { catalog_source: '', catalog_gym_slug: '' });
         void renderGyms();
       } catch (err) {
         fail(err);

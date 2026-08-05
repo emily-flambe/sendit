@@ -492,6 +492,26 @@ input[type='radio'] {
   max-width: 190px;
 }
 
+.state-warn {
+  color: #e8a08f;
+  background: rgba(217, 79, 61, 0.16);
+}
+
+.catalog-add {
+  padding: 10px 12px 14px;
+  background: var(--panel-2);
+  border-radius: 8px;
+}
+
+.catalog-add .hint {
+  margin: 0 0 8px;
+}
+
+.catalog-add code {
+  font-size: 13px;
+  word-break: break-all;
+}
+
 .catalog-summary {
   margin: 0 0 4px;
 }

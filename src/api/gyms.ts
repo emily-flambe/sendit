@@ -15,8 +15,11 @@ const gymPatchSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   notes: z.string().max(2000).optional(),
   archived: z.union([z.literal(0), z.literal(1)]).optional(),
-  // Link the gym to an external catalog, or clear it with empty strings.
+  // Link the gym to an external catalog, or clear it with empty strings. The
+  // slug is what catalog reads match on; the numeric id is provenance the sync
+  // fills in.
   catalog_source: z.enum(['', 'kaya']).optional(),
+  catalog_gym_slug: z.string().trim().max(120).optional(),
   catalog_gym_id: z.string().trim().max(64).optional(),
   map_boulder_url: z.string().trim().max(500).optional(),
   map_route_url: z.string().trim().max(500).optional(),
@@ -111,7 +114,7 @@ gyms.post('/:id/catalog/import', async (c) => {
   if (!gym) {
     return c.json({ error: 'Gym not found' }, 404);
   }
-  if (!gym.catalog_source || !gym.catalog_gym_id) {
+  if (!gym.catalog_source || !gym.catalog_gym_slug) {
     return c.json({ error: 'Gym is not linked to a catalog' }, 400);
   }
   const parsed = catalogImportSchema.safeParse(await c.req.json().catch(() => null));

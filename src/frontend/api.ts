@@ -112,12 +112,23 @@ export const api = {
     fields: Partial<
       Pick<
         Gym,
-        'name' | 'notes' | 'archived' | 'catalog_source' | 'catalog_gym_id' | 'map_boulder_url' | 'map_route_url'
+        | 'name'
+        | 'notes'
+        | 'archived'
+        | 'catalog_source'
+        | 'catalog_gym_slug'
+        | 'catalog_gym_id'
+        | 'map_boulder_url'
+        | 'map_route_url'
       >
     >
   ) => request<{ gym: Gym }>('PATCH', `/gyms/${id}`, fields),
 
   listCatalogSources: () => request<{ sources: CatalogSource[] }>('GET', '/catalogs'),
+  // Registers a KAYA gym by the slug in its URL. `sync.started` says whether the
+  // catalog is being pulled right now or waits for tonight's run.
+  addCatalogGym: (slug: string) =>
+    request<{ catalog: CatalogSource; sync: { started: boolean; reason: string } }>('POST', '/catalogs', { slug }),
   listGymCatalog: (gymId: string) =>
     request<{ catalog: CatalogEntryWithImport[] }>('GET', `/gyms/${gymId}/catalog`),
   importCatalog: (gymId: string, catalogIds: string[]) =>

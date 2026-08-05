@@ -74,6 +74,7 @@ export async function createGym(db: D1Database, userId: string, name: string, no
     archived: 0,
     created_at: Date.now(),
     catalog_source: '',
+    catalog_gym_slug: '',
     catalog_gym_id: '',
     map_boulder_url: '',
     map_route_url: '',
@@ -94,6 +95,7 @@ export async function updateGym(
     notes?: string;
     archived?: number;
     catalog_source?: string;
+    catalog_gym_slug?: string;
     catalog_gym_id?: string;
     map_boulder_url?: string;
     map_route_url?: string;
@@ -105,8 +107,8 @@ export async function updateGym(
   const next = { ...existing, ...fields };
   await db
     .prepare(
-      `UPDATE gyms SET name = ?, notes = ?, archived = ?, catalog_source = ?, catalog_gym_id = ?,
-              map_boulder_url = ?, map_route_url = ?
+      `UPDATE gyms SET name = ?, notes = ?, archived = ?, catalog_source = ?, catalog_gym_slug = ?,
+              catalog_gym_id = ?, map_boulder_url = ?, map_route_url = ?
        WHERE id = ? AND user_id = ?`
     )
     .bind(
@@ -114,6 +116,7 @@ export async function updateGym(
       next.notes,
       next.archived,
       next.catalog_source,
+      next.catalog_gym_slug,
       next.catalog_gym_id,
       next.map_boulder_url,
       next.map_route_url,
@@ -126,20 +129,41 @@ export async function updateGym(
 
 // ---------- gym catalog ----------
 
-// Catalogs the sync has populated, for the "link this gym" picker. Not
-// user-scoped: catalogs describe public gyms, not anyone's own data.
+// Every external gym the app knows about, for the "link this gym" picker. Not
+// user-scoped: catalogs describe public gyms, not anyone's own data. A gym added
+// by slug shows up here before its first sync, with no climbs and a name only
+// the sync can supply — hence the slug fallback.
 export async function listCatalogSources(db: D1Database): Promise<CatalogSource[]> {
   const result = await db
     .prepare(
-      `SELECT source, source_gym_id, MAX(source_gym_name) AS source_gym_name,
-              COUNT(*) AS climb_count, MAX(last_seen_at) AS last_synced_at
-       FROM gym_catalog
-       WHERE removed_at IS NULL
-       GROUP BY source, source_gym_id
-       ORDER BY source_gym_name`
+      `SELECT cg.source, cg.slug, cg.source_gym_id,
+              CASE WHEN cg.name <> '' THEN cg.name ELSE cg.slug END AS source_gym_name,
+              cg.status, cg.error, cg.last_synced_at,
+              (SELECT COUNT(*) FROM gym_catalog c
+                WHERE c.source = cg.source AND c.source_gym_slug = cg.slug AND c.removed_at IS NULL
+              ) AS climb_count
+       FROM catalog_gyms cg
+       ORDER BY source_gym_name COLLATE NOCASE`
     )
     .all<CatalogSource>();
   return result.results;
+}
+
+// Registers an external gym to sync, by the slug in its URL on the source. The
+// app can't verify the slug itself — KAYA rejects non-browser clients — so the
+// row starts 'pending' and the sync is what confirms or rejects it. Re-adding a
+// known slug is a no-op that returns the existing row.
+export async function addCatalogGym(db: D1Database, source: string, slug: string): Promise<CatalogSource> {
+  await db
+    .prepare(
+      `INSERT INTO catalog_gyms (source, slug, requested_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT (source, slug) DO NOTHING`
+    )
+    .bind(source, slug, Date.now())
+    .run();
+  const sources = await listCatalogSources(db);
+  return sources.find((s) => s.source === source && s.slug === slug)!;
 }
 
 // Every climb the gym's linked catalog currently lists, newest set first, each
@@ -150,7 +174,7 @@ export async function listGymCatalog(
   gym: Gym,
   opts: { includeRemoved?: boolean } = {}
 ): Promise<CatalogEntryWithImport[]> {
-  if (!gym.catalog_source || !gym.catalog_gym_id) return [];
+  if (!gym.catalog_source || !gym.catalog_gym_slug) return [];
   const removedClause = opts.includeRemoved ? '' : 'AND c.removed_at IS NULL';
   const result = await db
     .prepare(
@@ -159,10 +183,10 @@ export async function listGymCatalog(
                 WHERE r.gym_id = ? AND r.source = c.source AND r.source_external_id = c.external_id
                 LIMIT 1) AS imported_route_id
        FROM gym_catalog c
-       WHERE c.source = ? AND c.source_gym_id = ? ${removedClause}
+       WHERE c.source = ? AND c.source_gym_slug = ? ${removedClause}
        ORDER BY c.wall, c.first_seen_at DESC`
     )
-    .bind(gym.id, gym.catalog_source, gym.catalog_gym_id)
+    .bind(gym.id, gym.catalog_source, gym.catalog_gym_slug)
     .all<CatalogEntryWithImport>();
   return result.results;
 }
@@ -216,14 +240,14 @@ export async function linkRouteToCatalog(
   if (!route) return null;
 
   const gym = await getGym(db, userId, route.gym_id);
-  if (!gym?.catalog_source || !gym.catalog_gym_id) return null;
+  if (!gym?.catalog_source || !gym.catalog_gym_slug) return null;
 
   const entry = await db
     .prepare(
       `SELECT * FROM gym_catalog
-       WHERE id = ? AND source = ? AND source_gym_id = ?`
+       WHERE id = ? AND source = ? AND source_gym_slug = ?`
     )
-    .bind(catalogId, gym.catalog_source, gym.catalog_gym_id)
+    .bind(catalogId, gym.catalog_source, gym.catalog_gym_slug)
     .first<CatalogEntry>();
   if (!entry) return null;
 

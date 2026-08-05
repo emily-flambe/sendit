@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS gyms (
   created_at INTEGER NOT NULL,
   catalog_source TEXT NOT NULL DEFAULT '',
   catalog_gym_id TEXT NOT NULL DEFAULT '',
+  catalog_gym_slug TEXT NOT NULL DEFAULT '',
   map_boulder_url TEXT NOT NULL DEFAULT '',
   map_route_url TEXT NOT NULL DEFAULT '',
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -123,11 +124,25 @@ CREATE TABLE IF NOT EXISTS gym_catalog (
   first_seen_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   removed_at INTEGER,
-  source_updated_at TEXT NOT NULL DEFAULT ''
+  source_updated_at TEXT NOT NULL DEFAULT '',
+  source_gym_slug TEXT NOT NULL DEFAULT ''
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_gym_catalog_external ON gym_catalog(source, external_id);
 CREATE INDEX IF NOT EXISTS idx_gym_catalog_gym ON gym_catalog(source, source_gym_id, removed_at);
+CREATE INDEX IF NOT EXISTS idx_gym_catalog_slug ON gym_catalog(source, source_gym_slug, removed_at);
+
+CREATE TABLE IF NOT EXISTS catalog_gyms (
+  source TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  source_gym_id TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'ok', 'error')),
+  error TEXT NOT NULL DEFAULT '',
+  requested_at INTEGER NOT NULL,
+  last_synced_at INTEGER,
+  PRIMARY KEY (source, slug)
+);
 `;
 
 beforeAll(async () => {

@@ -1,7 +1,9 @@
 name: KAYA catalog sync
 
-# Refreshes gym_catalog from KAYA once a day. Runs in Actions rather than the
-# Worker because the pull needs a headless browser, which Workers can't run.
+# Refreshes gym_catalog from KAYA for every gym registered in catalog_gyms. Runs
+# in Actions rather than the Worker because the pull needs a headless browser,
+# which Workers can't run. The repository_dispatch trigger is what the app fires
+# when you add a gym, so its catalog arrives in minutes instead of tomorrow.
 on:
   schedule:
     # 02:00 UTC — evening in Colorado, after the day's setting is done.
@@ -9,9 +11,11 @@ on:
   workflow_dispatch:
     inputs:
       gym:
-        description: KAYA gym slug
-        default: movementboulder
+        description: KAYA gym slug (blank syncs every registered gym)
+        default: ''
         required: false
+  repository_dispatch:
+    types: [kaya-sync]
 
 concurrency:
   group: kaya-sync
@@ -46,27 +50,29 @@ jobs:
       - if: steps.creds.outputs.present == 'true'
         run: npx playwright install --with-deps chromium
 
-      - name: Pull catalog from KAYA
+      - name: Sync catalogs
         if: steps.creds.outputs.present == 'true'
-        # Via env, not ${{ }} inline, so the slug can't break out of the command.
-        env:
-          GYM_SLUG: ${{ inputs.gym || 'movementboulder' }}
-        run: node scripts/kaya-sync.mjs --gym "$GYM_SLUG" --sql catalog.sql --json catalog.json
-
-      - name: Apply to D1
-        if: steps.creds.outputs.present == 'true'
+        # Slugs reach the script through env and as an argv element, never
+        # interpolated into a shell command. A slug from either dispatch path
+        # syncs just that gym; the cron passes none and syncs everything
+        # registered.
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx wrangler d1 execute sendit-db --remote --yes --file=catalog.sql
+          GYM_SLUG: ${{ inputs.gym || github.event.client_payload.gym || '' }}
+        run: |
+          if [ -n "$GYM_SLUG" ]; then
+            node scripts/kaya-sync-all.mjs --gym "$GYM_SLUG"
+          else
+            node scripts/kaya-sync-all.mjs
+          fi
 
       # Kept so a bad sync can be diagnosed after the fact, and so the raw
       # response is available when KAYA changes a field.
       - name: Upload sync artifacts
-        if: steps.creds.outputs.present == 'true'
+        if: always() && steps.creds.outputs.present == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: kaya-catalog
-          path: |
-            catalog.sql
-            catalog.json
+          path: catalog-sync/
           retention-days: 14
+          if-no-files-found: ignore
