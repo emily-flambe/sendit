@@ -130,9 +130,8 @@ export async function updateGym(
 // ---------- gym catalog ----------
 
 // Every external gym the app knows about, for the "link this gym" picker. Not
-// user-scoped: catalogs describe public gyms, not anyone's own data. A gym added
-// by slug shows up here before its first sync, with no climbs and a name only
-// the sync can supply — hence the slug fallback.
+// user-scoped: catalogs describe public gyms, not anyone's own data. A gym shows
+// up before its first sync, when only its slug is known.
 export async function listCatalogSources(db: D1Database): Promise<CatalogSource[]> {
   const result = await db
     .prepare(
@@ -149,10 +148,8 @@ export async function listCatalogSources(db: D1Database): Promise<CatalogSource[
   return result.results;
 }
 
-// Registers an external gym to sync, by the slug in its URL on the source. The
-// app can't verify the slug itself — KAYA rejects non-browser clients — so the
-// row starts 'pending' and the sync is what confirms or rejects it. Re-adding a
-// known slug is a no-op that returns the existing row.
+// Registers an external gym to sync. The sync is what confirms the slug, so the
+// row starts 'pending'. Re-adding a known slug returns the existing row.
 export async function addCatalogGym(db: D1Database, source: string, slug: string): Promise<CatalogSource> {
   await db
     .prepare(

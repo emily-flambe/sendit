@@ -1,12 +1,8 @@
 import type { Env } from './env';
 
-// Asks GitHub Actions to run the catalog sync for one gym now, so a gym added in
-// the app gets its climbs in a couple of minutes instead of at the next nightly
-// cron. The pull needs a headless browser, which the Worker can't run, so the
-// job has to happen there.
-//
-// Both settings are optional: without them the add still succeeds and the gym
-// stays pending until the cron runs.
+// Asks GitHub Actions to sync one gym now. The pull needs a headless browser,
+// which the Worker can't run. Both settings are optional: without them the gym
+// stays pending until the nightly cron.
 export type SyncRequest = { started: boolean; reason: string };
 
 export async function requestCatalogSync(env: Env, slug: string): Promise<SyncRequest> {
@@ -20,8 +16,7 @@ export async function requestCatalogSync(env: Env, slug: string): Promise<SyncRe
         authorization: `Bearer ${env.GITHUB_TOKEN}`,
         accept: 'application/vnd.github+json',
         'content-type': 'application/json',
-        // GitHub rejects requests without one.
-        'user-agent': 'sendit-worker',
+        'user-agent': 'sendit-worker', // GitHub rejects requests without one
       },
       body: JSON.stringify({ event_type: 'kaya-sync', client_payload: { gym: slug } }),
     });

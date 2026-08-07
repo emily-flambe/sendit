@@ -51,9 +51,7 @@ function esc(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
-// Tape colours as gyms name them. The spellings with a space or an abbreviation
-// ("dk green") are KAYA's, kept verbatim so an imported route's colour matches
-// the tag on the wall.
+// Tape colours as gyms name them, including KAYA's own spellings ("dk green").
 const NAMED_COLORS: Record<string, string> = {
   red: '#d94f3d',
   orange: '#e8853c',
@@ -3758,25 +3756,31 @@ async function renderCatalogImport(gymId: string): Promise<void> {
   });
 }
 
-// Which gym, if any, has the "add a KAYA gym" panel open. Lives outside the
-// render so re-rendering the screen keeps the panel where the user opened it.
+// Outside the render so re-rendering keeps the panel where the user opened it.
 let addCatalogForGym: string | null = null;
 
 async function renderGyms(): Promise<void> {
-  let sources: CatalogSource[] = [];
   try {
     gyms = (await api.listGyms()).gyms;
-    sources = (await api.listCatalogSources()).sources;
   } catch (err) {
     fail(err);
     return;
   }
 
+  // Your gyms are the page; a catalog list that won't load must not cost you it.
+  // Preview deploys run against production's schema, so this does fail there.
+  let sources: CatalogSource[] = [];
+  let catalogsReachable = true;
+  try {
+    sources = (await api.listCatalogSources()).sources;
+  } catch {
+    catalogsReachable = false;
+  }
+
   const bySlug = new Map(sources.map((s) => [`${s.source}:${s.slug}`, s]));
 
-  // A gym linked to a catalog gets an import link; an unlinked one gets a picker
-  // of known catalogs plus the option to name a new KAYA gym. A catalog only the
-  // sync can fill says so, since it stays empty for a few minutes.
+  // A linked gym gets an import link, an unlinked one a picker. A catalog with no
+  // climbs yet says so, since the sync takes a few minutes.
   const catalogControl = (g: Gym): string => {
     if (g.catalog_source && g.catalog_gym_slug) {
       const source = bySlug.get(`${g.catalog_source}:${g.catalog_gym_slug}`);
@@ -3792,6 +3796,8 @@ async function renderGyms(): Promise<void> {
         <button class="linkish dim" data-unlink="${esc(g.id)}">unlink</button>
       </span>`;
     }
+    // Nothing to offer if the catalog list didn't load: linking would fail too.
+    if (!catalogsReachable) return '';
     return `<span class="gym-catalog">
       <select class="catalog-pick" data-link="${esc(g.id)}">
         <option value="">link a route catalog…</option>
@@ -3808,8 +3814,7 @@ async function renderGyms(): Promise<void> {
     </span>`;
   };
 
-  // Shown under the gym that asked for it. KAYA has no gym search, so the slug
-  // out of the gym's own URL is the only way to name one.
+  // KAYA has no gym search, so the slug is the only way to name a gym.
   const addPanel = (gymId: string): string => `
     <li class="catalog-add">
       <form id="catalog-add-form">
@@ -3892,8 +3897,7 @@ async function renderGyms(): Promise<void> {
     const gymId = (form.elements.namedItem('gym') as HTMLInputElement).value;
     if (!slug) return;
     try {
-      // Linking straight away, before the climbs land: the catalog is this gym's
-      // whether the pull takes two minutes or waits for tonight's run.
+      // Link before the climbs land: the catalog is this gym's either way.
       const { sync } = await api.addCatalogGym(slug);
       await api.updateGym(gymId, { catalog_source: 'kaya', catalog_gym_slug: slug });
       addCatalogForGym = null;

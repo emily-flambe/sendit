@@ -9,9 +9,7 @@ import { requestCatalogSync } from '../sync-trigger';
 // menu the user picks from when linking one of their gyms to a catalog.
 const catalogs = new Hono<{ Bindings: Env }>();
 
-// KAYA slugs are the trailing path segment of a gym's URL, e.g.
-// kayaclimb.com/gym/thespotboulder. Anything a URL wouldn't carry is rejected
-// here rather than handed to the sync.
+// A slug is the last path segment of a gym's URL: kayaclimb.com/gym/thespotboulder.
 const addSchema = z.object({
   source: z.enum(['kaya']).default('kaya'),
   slug: z
@@ -29,11 +27,9 @@ catalogs.get('/', async (c) => {
   return c.json({ sources });
 });
 
-// Register a new external gym to sync. The Worker can't confirm the slug — the
-// source rejects non-browser clients — so the row is stored as pending and the
-// sync job is asked to run now. A failed trigger is not a failed add: the
-// nightly sync picks the gym up regardless, so the response reports which
-// happened rather than erroring out.
+// Registers a gym to sync. The Worker can't confirm the slug (KAYA rejects
+// non-browser clients), so the row starts pending and the sync job is asked to
+// run now; a failed trigger still leaves the gym for the nightly run.
 catalogs.post('/', async (c) => {
   const parsed = addSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) {

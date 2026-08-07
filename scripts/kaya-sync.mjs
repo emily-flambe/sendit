@@ -38,8 +38,7 @@ const sqlNum = (v) => (v === null || v === undefined ? 'NULL' : Number(v));
 // KAYA's climb_type names map onto sendit's two disciplines.
 const DISCIPLINE = { Bouldering: 'boulder', Routes: 'route' };
 
-// KAYA writes boulder grades lowercase ('v3', 'vB'); the app's grade list is
-// uppercase, and two spellings of one grade filter as two grades.
+// KAYA writes grades lowercase ('v3'); two spellings would filter as two grades.
 const gradeLabel = (g) => (/^v/.test(g) ? `V${g.slice(1)}` : g);
 
 const browser = await chromium.launch();
@@ -161,8 +160,7 @@ ON CONFLICT(source, external_id) DO UPDATE SET
    AND last_seen_at < ${now} AND removed_at IS NULL;`,
     );
 
-    // Confirms the slug the app accepted on faith, and supplies the gym's real
-    // name and id — neither of which the app can look up itself.
+    // Confirms the slug the app accepted on faith, and names the gym.
     lines.push(
       `INSERT INTO catalog_gyms (source, slug, source_gym_id, name, status, error, requested_at, last_synced_at)
 VALUES (${sqlStr(SOURCE)}, ${sqlStr(gym.slug ?? slug)}, ${sqlStr(gym.id)}, ${sqlStr(gym.name ?? '')}, 'ok', '', ${now}, ${now})

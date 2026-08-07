@@ -5,9 +5,8 @@
 //   node scripts/kaya-sync-all.mjs --gym thespotboulder   # just this one
 //   node scripts/kaya-sync-all.mjs --dry-run       # list what it would sync
 //
-// One gym failing does not stop the others: its row is marked 'error' with the
-// message, which the app shows next to the gym, and the run continues. The exit
-// code is still non-zero so a broken sync is visible in Actions.
+// One gym failing marks its row 'error' and the run continues, but still exits
+// non-zero so Actions shows the failure.
 
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -22,8 +21,7 @@ function arg(name, fallback = null) {
 }
 const only = arg('gym');
 const dryRun = process.argv.includes('--dry-run');
-// Kept in the workspace so the workflow can upload the SQL and raw JSON as run
-// artifacts, the same as the single-gym sync did.
+// In the workspace so the workflow can upload it as a run artifact.
 const work = arg('out', 'catalog-sync');
 mkdirSync(work, { recursive: true });
 const sqlStr = (v) => `'${String(v ?? '').replace(/'/g, "''")}'`;
@@ -41,8 +39,8 @@ function registeredSlugs() {
   return rows.map((r) => r.slug).filter(Boolean);
 }
 
-// A gym asked for by hand may not be registered yet (the app registers it, but
-// a manual run should still work), so an explicit --gym is trusted as-is.
+// An explicit --gym is trusted as-is, so a manual run works before the app has
+// registered the gym.
 const slugs = only ? [only] : registeredSlugs();
 if (slugs.length === 0) {
   console.error('no gyms registered in catalog_gyms; nothing to sync');
@@ -65,8 +63,7 @@ for (const slug of slugs) {
     const message = (err instanceof Error ? err.message : String(err)).slice(0, 400);
     console.error(`✗ ${slug}: ${message}`);
     failures.push(slug);
-    // Surfaced in the app next to the gym, so a typo'd slug explains itself
-    // instead of sitting on "pending" forever.
+    // So a typo'd slug explains itself instead of sitting on "pending" forever.
     const errPath = join(work, `${slug}-error.sql`);
     writeFileSync(
       errPath,

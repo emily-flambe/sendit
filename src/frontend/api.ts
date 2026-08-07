@@ -125,8 +125,7 @@ export const api = {
   ) => request<{ gym: Gym }>('PATCH', `/gyms/${id}`, fields),
 
   listCatalogSources: () => request<{ sources: CatalogSource[] }>('GET', '/catalogs'),
-  // Registers a KAYA gym by the slug in its URL. `sync.started` says whether the
-  // catalog is being pulled right now or waits for tonight's run.
+  // `sync.started` says whether the pull is running now or waits for the cron.
   addCatalogGym: (slug: string) =>
     request<{ catalog: CatalogSource; sync: { started: boolean; reason: string } }>('POST', '/catalogs', { slug }),
   listGymCatalog: (gymId: string) =>
