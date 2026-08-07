@@ -4,4 +4,7 @@ export interface Env {
   DB: D1Database;
   PHOTOS: R2Bucket;
   JWT_SECRET: string;
+  // Optional: lets adding a gym trigger the sync workflow. See docs/kaya-sync.md.
+  GITHUB_TOKEN?: string;
+  GITHUB_REPO?: string;
 }

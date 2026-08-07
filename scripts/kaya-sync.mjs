@@ -38,6 +38,9 @@ const sqlNum = (v) => (v === null || v === undefined ? 'NULL' : Number(v));
 // KAYA's climb_type names map onto sendit's two disciplines.
 const DISCIPLINE = { Bouldering: 'boulder', Routes: 'route' };
 
+// KAYA writes grades lowercase ('v3'); two spellings would filter as two grades.
+const gradeLabel = (g) => (/^v/.test(g) ? `V${g.slice(1)}` : g);
+
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage();
@@ -119,10 +122,11 @@ try {
         sqlStr(`${SOURCE}:${c.id}`),
         sqlStr(SOURCE),
         sqlStr(gym.id),
+        sqlStr(gym.slug ?? slug),
         sqlStr(gym.name ?? ''),
         sqlStr(c.id),
         sqlStr(c.slug ?? ''),
-        sqlStr(c.grade?.name ?? ''),
+        sqlStr(gradeLabel(c.grade?.name ?? '')),
         sqlStr((c.color?.name ?? '').toLowerCase()),
         sqlStr(c.wall?.name ?? ''),
         sqlStr(DISCIPLINE[c.climb_type?.name] ?? 'route'),
@@ -136,10 +140,11 @@ try {
       // first_seen_at survives an update so "new this week" stays meaningful;
       // removed_at clears because seeing the climb again means it is back.
       lines.push(
-        `INSERT INTO gym_catalog (id, source, source_gym_id, source_gym_name, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, source_updated_at)
+        `INSERT INTO gym_catalog (id, source, source_gym_id, source_gym_slug, source_gym_name, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, source_updated_at)
 VALUES (${cols})
 ON CONFLICT(source, external_id) DO UPDATE SET
-  source_gym_id = excluded.source_gym_id, source_gym_name = excluded.source_gym_name,
+  source_gym_id = excluded.source_gym_id, source_gym_slug = excluded.source_gym_slug,
+  source_gym_name = excluded.source_gym_name,
   slug = excluded.slug, grade = excluded.grade,
   color = excluded.color, wall = excluded.wall, discipline = excluded.discipline,
   rating = excluded.rating, ascent_count = excluded.ascent_count, is_closed = excluded.is_closed,
@@ -151,8 +156,17 @@ ON CONFLICT(source, external_id) DO UPDATE SET
     // Anything this run did not see has been stripped off the wall.
     lines.push(
       `UPDATE gym_catalog SET removed_at = ${now}
- WHERE source = ${sqlStr(SOURCE)} AND source_gym_id = ${sqlStr(gym.id)}
+ WHERE source = ${sqlStr(SOURCE)} AND source_gym_slug = ${sqlStr(gym.slug ?? slug)}
    AND last_seen_at < ${now} AND removed_at IS NULL;`,
+    );
+
+    // Confirms the slug the app accepted on faith, and names the gym.
+    lines.push(
+      `INSERT INTO catalog_gyms (source, slug, source_gym_id, name, status, error, requested_at, last_synced_at)
+VALUES (${sqlStr(SOURCE)}, ${sqlStr(gym.slug ?? slug)}, ${sqlStr(gym.id)}, ${sqlStr(gym.name ?? '')}, 'ok', '', ${now}, ${now})
+ON CONFLICT(source, slug) DO UPDATE SET
+  source_gym_id = excluded.source_gym_id, name = excluded.name,
+  status = 'ok', error = '', last_synced_at = excluded.last_synced_at;`,
     );
 
     writeFileSync(sqlPath, lines.join('\n') + '\n');

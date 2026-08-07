@@ -17,9 +17,12 @@ export interface Gym {
   notes: string;
   archived: number;
   created_at: number;
-  // Which external catalog this gym mirrors, e.g. 'kaya' + '211'. Both empty
-  // when the gym has no catalog, which is the default.
+  // Which external catalog this gym mirrors, e.g. 'kaya' + 'movementboulder'.
+  // Both empty when the gym has no catalog, which is the default. The slug is
+  // what catalog reads match on; catalog_gym_id is the source's own numeric id,
+  // kept as provenance.
   catalog_source: string;
+  catalog_gym_slug: string;
   catalog_gym_id: string;
   // Floor-map images for this gym, one per discipline. '' means no map.
   map_boulder_url: string;
@@ -52,6 +55,7 @@ export interface CatalogEntry {
   id: string;
   source: string;
   source_gym_id: string;
+  source_gym_slug: string;
   source_gym_name: string;
   external_id: string;
   slug: string;
@@ -74,13 +78,18 @@ export interface CatalogEntryWithImport extends CatalogEntry {
   imported_route_id: string | null;
 }
 
-// One catalog a gym can be linked to, as offered by the catalog picker.
+// One catalog a gym can be linked to, as offered by the catalog picker. A gym
+// added by slug appears here immediately with status 'pending' and no climbs;
+// only a sync can fill in the name and the inventory.
 export interface CatalogSource {
   source: string;
+  slug: string;
   source_gym_id: string;
   source_gym_name: string;
+  status: 'pending' | 'ok' | 'error';
+  error: string;
   climb_count: number;
-  last_synced_at: number;
+  last_synced_at: number | null;
 }
 
 export interface Attempt {

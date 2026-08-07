@@ -1014,8 +1014,8 @@ describe('gym catalog', () => {
   ) {
     for (const r of rows) {
       await env.DB.prepare(
-        `INSERT INTO gym_catalog (id, source, source_gym_id, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, removed_at)
-         VALUES (?, 'kaya', '211', ?, '', ?, ?, ?, ?, 4.5, 7, 0, 1, 1, ?)`
+        `INSERT INTO gym_catalog (id, source, source_gym_id, source_gym_slug, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, removed_at)
+         VALUES (?, 'kaya', '211', 'movementboulder', ?, '', ?, ?, ?, ?, 4.5, 7, 0, 1, 1, ?)`
       )
         .bind(`kaya:${r.external_id}`, r.external_id, r.grade, r.color, r.wall, r.discipline, r.removed ? 2 : null)
         .run();
@@ -1025,7 +1025,7 @@ describe('gym catalog', () => {
   beforeAll(async () => {
     token = await registerUser('catalog-user');
     gymId = (await call('POST', '/api/gyms', { name: 'Movement Boulder' }, token)).data.gym.id;
-    await call('PATCH', `/api/gyms/${gymId}`, { catalog_source: 'kaya', catalog_gym_id: '211' }, token);
+    await call('PATCH', `/api/gyms/${gymId}`, { catalog_source: 'kaya', catalog_gym_slug: 'movementboulder' }, token);
     await seedCatalog([
       { external_id: 'c1', grade: 'v2', color: 'blue', wall: 'B4 - The Cave', discipline: 'boulder' },
       { external_id: 'c2', grade: '5.11c', color: 'green', wall: 'Grey Wall', discipline: 'route' },
@@ -1109,7 +1109,7 @@ describe('gym catalog', () => {
 
   it('ignores catalog ids belonging to a different gym', async () => {
     await seedCatalog([{ external_id: 'other', grade: 'v9', color: 'red', wall: 'Elsewhere', discipline: 'boulder' }]);
-    await env.DB.prepare("UPDATE gym_catalog SET source_gym_id = '999' WHERE external_id = 'other'").run();
+    await env.DB.prepare("UPDATE gym_catalog SET source_gym_slug = 'elsewhere' WHERE external_id = 'other'").run();
 
     const res = await call('POST', `/api/gyms/${gymId}/catalog/import`, { catalog_ids: ['kaya:other'] }, token);
     expect(res.status).toBe(201);
@@ -1131,11 +1131,16 @@ describe('catalog sources', () => {
   beforeAll(async () => {
     token = await registerUser('catalog-picker');
     await env.DB.prepare(
-      `INSERT INTO gym_catalog (id, source, source_gym_id, source_gym_name, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, removed_at)
-       VALUES ('kaya:p1','kaya','211','Movement Boulder','p1','','v3','red','Grey Wall','boulder',4,2,0,1,5,NULL),
-              ('kaya:p2','kaya','211','Movement Boulder','p2','','v4','blue','Grey Wall','boulder',4,2,0,1,9,NULL),
-              ('kaya:p3','kaya','999','Somewhere Else','p3','','v1','pink','Slab','boulder',4,2,0,1,3,NULL),
-              ('kaya:p4','kaya','211','Movement Boulder','p4','','v9','black','Cave','boulder',4,2,0,1,4,7)`
+      `INSERT INTO catalog_gyms (source, slug, source_gym_id, name, status, error, requested_at, last_synced_at)
+       VALUES ('kaya','movementboulder','211','Movement Boulder','ok','',1,9),
+              ('kaya','somewhereelse','999','Somewhere Else','ok','',1,3)`
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO gym_catalog (id, source, source_gym_id, source_gym_slug, source_gym_name, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, removed_at)
+       VALUES ('kaya:p1','kaya','211','movementboulder','Movement Boulder','p1','','V3','red','Grey Wall','boulder',4,2,0,1,5,NULL),
+              ('kaya:p2','kaya','211','movementboulder','Movement Boulder','p2','','V4','blue','Grey Wall','boulder',4,2,0,1,9,NULL),
+              ('kaya:p3','kaya','999','somewhereelse','Somewhere Else','p3','','V1','pink','Slab','boulder',4,2,0,1,3,NULL),
+              ('kaya:p4','kaya','211','movementboulder','Movement Boulder','p4','','V9','black','Cave','boulder',4,2,0,1,4,7)`
     ).run();
   });
 
@@ -1144,15 +1149,64 @@ describe('catalog sources', () => {
     expect(status).toBe(200);
 
     const sources = data.sources as Json[];
-    const boulder = sources.find((s) => s.source_gym_id === '211')!;
+    const boulder = sources.find((s) => s.slug === 'movementboulder')!;
     expect(boulder.source_gym_name).toBe('Movement Boulder');
+    expect(boulder.source_gym_id).toBe('211');
     expect(boulder.climb_count).toBe(2); // p4 is removed
     expect(boulder.last_synced_at).toBe(9);
-    expect(sources.find((s) => s.source_gym_id === '999')!.climb_count).toBe(1);
+    expect(sources.find((s) => s.slug === 'somewhereelse')!.climb_count).toBe(1);
   });
 
   it('needs auth', async () => {
     expect((await call('GET', '/api/catalogs')).status).toBe(401);
+    expect((await call('POST', '/api/catalogs', { slug: 'thespotboulder' })).status).toBe(401);
+  });
+
+  // A gym the app has never seen can only be named by its slug: KAYA has no
+  // search, and the Worker can't reach KAYA to check the slug either.
+  it('registers a gym by slug, pending until a sync fills it in', async () => {
+    const res = await call('POST', '/api/catalogs', { slug: 'ThePotatoGym' }, token);
+    expect(res.status).toBe(201);
+    expect(res.data.catalog.slug).toBe('thepotatogym'); // slugs are lowercase
+    expect(res.data.catalog.status).toBe('pending');
+    expect(res.data.catalog.climb_count).toBe(0);
+    // No GitHub token in tests, so nothing is triggered and the add still stands.
+    expect(res.data.sync.started).toBe(false);
+
+    const sources = (await call('GET', '/api/catalogs', undefined, token)).data.sources as Json[];
+    const added = sources.find((s) => s.slug === 'thepotatogym')!;
+    expect(added.source_gym_name).toBe('thepotatogym'); // the slug stands in until the sync names it
+  });
+
+  it('is idempotent, so re-adding a known gym does not disturb it', async () => {
+    await call('POST', '/api/catalogs', { slug: 'movementboulder' }, token);
+    const sources = (await call('GET', '/api/catalogs', undefined, token)).data.sources as Json[];
+    const existing = sources.filter((s) => s.slug === 'movementboulder');
+    expect(existing).toHaveLength(1);
+    expect(existing[0].status).toBe('ok');
+    expect(existing[0].climb_count).toBe(2);
+  });
+
+  it('rejects anything that is not a slug', async () => {
+    for (const slug of ['', 'https://kayaclimb.com/gym/thespotboulder', 'the spot', 'a/b', "'; DROP TABLE"]) {
+      expect((await call('POST', '/api/catalogs', { slug }, token)).status).toBe(400);
+    }
+  });
+
+  // A gym can be linked before its catalog exists, which is the whole point of
+  // adding one by slug: the pull happens elsewhere, minutes later.
+  it('lets a gym link to a pending catalog and report nothing to import yet', async () => {
+    await call('POST', '/api/catalogs', { slug: 'pendinggym' }, token);
+    const gymId = (await call('POST', '/api/gyms', { name: 'Pending' }, token)).data.gym.id;
+    const patched = await call(
+      'PATCH',
+      `/api/gyms/${gymId}`,
+      { catalog_source: 'kaya', catalog_gym_slug: 'pendinggym' },
+      token
+    );
+    expect(patched.status).toBe(200);
+    expect(patched.data.gym.catalog_gym_slug).toBe('pendinggym');
+    expect((await call('GET', `/api/gyms/${gymId}/catalog`, undefined, token)).data.catalog).toEqual([]);
   });
 });
 
@@ -1186,11 +1240,11 @@ describe('linking an existing route to a catalog climb', () => {
   beforeAll(async () => {
     token = await registerUser('linker');
     gymId = (await call('POST', '/api/gyms', { name: 'Movement' }, token)).data.gym.id;
-    await call('PATCH', `/api/gyms/${gymId}`, { catalog_source: 'kaya', catalog_gym_id: '211' }, token);
+    await call('PATCH', `/api/gyms/${gymId}`, { catalog_source: 'kaya', catalog_gym_slug: 'movementboulder' }, token);
     await env.DB.prepare(
-      `INSERT INTO gym_catalog (id, source, source_gym_id, source_gym_name, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, removed_at, source_updated_at)
-       VALUES ('kaya:L1','kaya','211','Movement Boulder','L1','','v4','pink','B3 - West Wall Right','boulder',NULL,0,0,1,1,NULL,'2026-07-30T12:00:00.000Z'),
-              ('kaya:L2','kaya','211','Movement Boulder','L2','','v4','pink','B3 - West Wall Right','boulder',NULL,0,0,1,1,NULL,'2026-06-01T12:00:00.000Z')`
+      `INSERT INTO gym_catalog (id, source, source_gym_id, source_gym_slug, source_gym_name, external_id, slug, grade, color, wall, discipline, rating, ascent_count, is_closed, first_seen_at, last_seen_at, removed_at, source_updated_at)
+       VALUES ('kaya:L1','kaya','211','movementboulder','Movement Boulder','L1','','V4','pink','B3 - West Wall Right','boulder',NULL,0,0,1,1,NULL,'2026-07-30T12:00:00.000Z'),
+              ('kaya:L2','kaya','211','movementboulder','Movement Boulder','L2','','V4','pink','B3 - West Wall Right','boulder',NULL,0,0,1,1,NULL,'2026-06-01T12:00:00.000Z')`
     ).run();
     routeId = (
       await call('POST', `/api/gyms/${gymId}/routes`, { grade: 'V4', color: 'pink', wall: 'my own words' }, token)
@@ -1236,7 +1290,7 @@ describe('linking an existing route to a catalog climb', () => {
   });
 
   it('refuses a climb from a gym the route does not belong to', async () => {
-    await env.DB.prepare("UPDATE gym_catalog SET source_gym_id='999' WHERE external_id='L2'").run();
+    await env.DB.prepare("UPDATE gym_catalog SET source_gym_slug='elsewhere' WHERE external_id='L2'").run();
     const res = await call('PUT', `/api/routes/${routeId}/catalog-link`, { catalog_id: 'kaya:L2' }, token);
     expect(res.status).toBe(409);
   });
