@@ -169,6 +169,50 @@ function setDateLabel(e: { source_updated_at: string }): string {
   return `set ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
 }
 
+function matchingKayaEntries(
+  catalog: CatalogEntryWithImport[],
+  discipline: Discipline,
+  color: string,
+  grade: string
+): CatalogEntryWithImport[] {
+  const selectedColor = color.trim().toLowerCase();
+  const selectedGrade = grade.trim().toLowerCase();
+  return catalog.filter(
+    (entry) =>
+      !entry.imported_route_id &&
+      entry.discipline === discipline &&
+      (!selectedColor || entry.color.trim().toLowerCase() === selectedColor) &&
+      (!selectedGrade || entry.grade.trim().toLowerCase() === selectedGrade)
+  );
+}
+
+function kayaOptionRows(entries: CatalogEntryWithImport[], query: string, selectedId: string | null = null): string {
+  const q = query.trim().toLowerCase();
+  const sorted = entries
+    .filter((entry) => !q || `${entry.wall} ${entry.grade} ${entry.color}`.toLowerCase().includes(q))
+    .sort((a, b) => b.source_updated_at.localeCompare(a.source_updated_at));
+  const hits = sorted.slice(0, 40);
+  const selected = sorted.find((entry) => entry.id === selectedId);
+  if (selected && !hits.includes(selected)) hits.splice(0, 1, selected);
+
+  return (
+    hits
+      .map(
+        (entry) => `<li>
+          <button type="button" class="kaya-option${entry.id === selectedId ? ' active' : ''}"
+            data-pick="${esc(entry.id)}" aria-pressed="${entry.id === selectedId}">
+            <span class="tape" style="background:${colorHex(entry.color)}"></span>
+            <span class="kaya-option-body">
+              <strong>${esc([entry.grade, entry.color].filter(Boolean).join(' · '))}</strong>
+              <span class="catalog-row-meta">${esc([entry.wall, setDateLabel(entry)].filter(Boolean).join(' · '))}</span>
+            </span>
+          </button>
+        </li>`
+      )
+      .join('') || '<li class="empty">No climbs match.</li>'
+  );
+}
+
 // Catalog-imported climbs have no name — gyms like Movement don't name their
 // boulders — so the wall is what tells a dozen same-colour V2s apart. A named
 // route keeps its wall in the meta line instead, so the wall shows up once.
@@ -2996,6 +3040,7 @@ async function renderRouteForm(routeId: string | null, linkPhotoId: string | nul
           <div class="chips" id="grade-chips"></div>
           <input name="grade" placeholder="V4, 5.11, comp tag…" value="${esc(route?.grade ?? '')}" />
         </label>
+        ${routeId ? '' : '<section class="kaya-link" id="kaya-create-link" hidden></section>'}
         <label>Wall / area
           <input name="wall" placeholder="Overhang, slab wall, cave…" value="${esc(route?.wall ?? '')}" />
         </label>
@@ -3015,6 +3060,86 @@ async function renderRouteForm(routeId: string | null, linkPhotoId: string | nul
   const form = document.getElementById('route-form') as HTMLFormElement;
   const colorInput = form.querySelector<HTMLInputElement>('input[name=color]')!;
   const gradeInput = form.querySelector<HTMLInputElement>('input[name=grade]')!;
+  const disciplineSelect = form.querySelector<HTMLSelectElement>('select[name=discipline]')!;
+  const gymSelect = form.querySelector<HTMLSelectElement>('select[name=gym_id]')!;
+  const kayaHost = document.getElementById('kaya-create-link') as HTMLElement | null;
+  let selectedCatalogId: string | null = null;
+  let kayaCatalog: CatalogEntryWithImport[] = [];
+  let kayaCatalogGymId = '';
+  let kayaSearch = '';
+  let kayaRequest = 0;
+
+  function drawCreateKayaPicker(): void {
+    if (!kayaHost?.isConnected || kayaCatalogGymId !== gymSelect.value) return;
+    const entries = matchingKayaEntries(
+      kayaCatalog,
+      disciplineSelect.value as Discipline,
+      colorInput.value,
+      gradeInput.value
+    );
+    if (selectedCatalogId && !entries.some((entry) => entry.id === selectedCatalogId)) selectedCatalogId = null;
+    if (entries.length === 0) {
+      kayaHost.hidden = true;
+      kayaHost.textContent = '';
+      return;
+    }
+
+    kayaHost.hidden = false;
+    kayaHost.innerHTML = `<div class="section-head"><h3>Link to a KAYA climb</h3></div>
+      <p class="hint">Optional. Check the wall and set date. A linked climb uses KAYA's wall.</p>
+      <div id="kaya-create-selection" aria-live="polite"></div>
+      <input id="kaya-create-search" aria-label="Filter KAYA climbs" placeholder="filter by wall, grade or colour" value="${esc(kayaSearch)}" />
+      <ul class="kaya-options" id="kaya-create-options"></ul>`;
+
+    const selection = kayaHost.querySelector<HTMLElement>('#kaya-create-selection')!;
+    const list = kayaHost.querySelector<HTMLUListElement>('#kaya-create-options')!;
+    const search = kayaHost.querySelector<HTMLInputElement>('#kaya-create-search')!;
+    const drawOptions = () => {
+      const selected = entries.find((entry) => entry.id === selectedCatalogId);
+      selection.innerHTML = selected
+        ? `<p class="kaya-selection">Selected: ${esc([selected.grade, selected.color, selected.wall].filter(Boolean).join(' · '))}
+            <button type="button" class="linkish" id="kaya-create-clear">clear</button></p>`
+        : '';
+      selection.querySelector<HTMLButtonElement>('#kaya-create-clear')?.addEventListener('click', () => {
+        selectedCatalogId = null;
+        drawOptions();
+      });
+      list.innerHTML = kayaOptionRows(entries, kayaSearch, selectedCatalogId);
+      list.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((btn) =>
+        btn.addEventListener('click', () => {
+          selectedCatalogId = selectedCatalogId === btn.dataset.pick ? null : btn.dataset.pick!;
+          drawOptions();
+        })
+      );
+    };
+    search.addEventListener('input', () => {
+      kayaSearch = search.value;
+      drawOptions();
+    });
+    drawOptions();
+  }
+
+  async function loadCreateKayaCatalog(): Promise<void> {
+    if (!kayaHost) return;
+    const request = ++kayaRequest;
+    const gymId = gymSelect.value;
+    const gym = gyms.find((candidate) => candidate.id === gymId);
+    kayaCatalog = [];
+    kayaCatalogGymId = '';
+    kayaHost.hidden = true;
+    kayaHost.textContent = '';
+    if (!gym?.catalog_source) return;
+
+    try {
+      const { catalog } = await api.listGymCatalog(gymId);
+      if (!kayaHost.isConnected || request !== kayaRequest || gymSelect.value !== gymId) return;
+      kayaCatalog = catalog;
+      kayaCatalogGymId = gymId;
+      drawCreateKayaPicker();
+    } catch {
+      if (request === kayaRequest) kayaHost.hidden = true;
+    }
+  }
 
   form.querySelectorAll<HTMLButtonElement>('.swatch').forEach((btn) =>
     btn.addEventListener('click', () => {
@@ -3022,10 +3147,9 @@ async function renderRouteForm(routeId: string | null, linkPhotoId: string | nul
       form.querySelectorAll('.swatch').forEach((s) => s.classList.remove('active'));
       colorInput.value = wasActive ? '' : (btn.dataset.color ?? '');
       if (!wasActive) btn.classList.add('active');
+      drawCreateKayaPicker();
     })
   );
-
-  const disciplineSelect = form.querySelector<HTMLSelectElement>('select[name=discipline]')!;
 
   function renderGradeChips(): void {
     const grades = disciplineSelect.value === 'boulder' ? BOULDER_GRADES : ROPE_GRADES;
@@ -3038,18 +3162,23 @@ async function renderRouteForm(routeId: string | null, linkPhotoId: string | nul
       chip.textContent = g;
       chip.addEventListener('click', () => {
         gradeInput.value = g;
+        drawCreateKayaPicker();
       });
       container.appendChild(chip);
     }
   }
   renderGradeChips();
-  disciplineSelect.addEventListener('change', renderGradeChips);
+  disciplineSelect.addEventListener('change', () => {
+    renderGradeChips();
+    selectedCatalogId = null;
+    drawCreateKayaPicker();
+  });
+  gradeInput.addEventListener('input', drawCreateKayaPicker);
 
   // Pin lives outside the form fields because it's set by tapping, not typing.
   let pin: { x: number; y: number } | null =
     route && route.map_x != null && route.map_y != null ? { x: route.map_x, y: route.map_y } : null;
 
-  const gymSelect = form.querySelector<HTMLSelectElement>('select[name=gym_id]')!;
   const slot = document.getElementById('map-slot')!;
 
   function drawMap(): void {
@@ -3077,16 +3206,26 @@ async function renderRouteForm(routeId: string | null, linkPhotoId: string | nul
 
   drawMap();
   // The map depends on both, and the pin means nothing once either changes.
-  gymSelect.addEventListener('change', () => { pin = null; drawMap(); });
+  gymSelect.addEventListener('change', () => {
+    pin = null;
+    selectedCatalogId = null;
+    kayaSearch = '';
+    drawMap();
+    void loadCreateKayaCatalog();
+  });
   disciplineSelect.addEventListener('change', () => { pin = null; drawMap(); });
   form.querySelectorAll<HTMLButtonElement>('.swatch').forEach((btn) =>
     btn.addEventListener('click', () => drawMap())
   );
+  void loadCreateKayaCatalog();
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const submitButton = form.querySelector<HTMLButtonElement>('button[type=submit]')!;
+    submitButton.disabled = true;
     const data = new FormData(form);
     const gymId = String(data.get('gym_id'));
+    const catalogId = selectedCatalogId;
     const fields = {
       name: String(data.get('name') ?? ''),
       grade: String(data.get('grade') ?? ''),
@@ -3103,12 +3242,25 @@ async function renderRouteForm(routeId: string | null, linkPhotoId: string | nul
         window.location.hash = `#/route/${routeId}`;
       } else {
         const created = await api.createRoute(gymId, fields);
+        let photoLinkFailed = false;
+        let kayaLinkFailed = false;
         if (linkPhotoId) {
-          await api.linkPhoto(created.route.id, linkPhotoId).catch(() => toast('Route created, but the photo could not be linked.'));
+          await api.linkPhoto(created.route.id, linkPhotoId).catch(() => {
+            photoLinkFailed = true;
+          });
         }
+        if (catalogId) {
+          await api.linkRouteToCatalog(created.route.id, catalogId).catch(() => {
+            kayaLinkFailed = true;
+          });
+        }
+        if (photoLinkFailed && kayaLinkFailed) toast('Route created, but the photo and KAYA climb could not be linked.');
+        else if (photoLinkFailed) toast('Route created, but the photo could not be linked.');
+        else if (kayaLinkFailed) toast('Route created, but the KAYA climb could not be linked.');
         window.location.hash = `#/route/${created.route.id}`;
       }
     } catch (err) {
+      submitButton.disabled = false;
       fail(err);
     }
   });
@@ -3155,9 +3307,7 @@ async function renderKayaLink(route: Route, rerender: () => void): Promise<void>
     return;
   }
 
-  // Unclaimed climbs of the same kind. Offering a rope route as a candidate for
-  // a boulder is never right, so that's filtered rather than left to the search.
-  const free = catalog.filter((e) => !e.imported_route_id && e.discipline === route.discipline);
+  const free = matchingKayaEntries(catalog, route.discipline, route.color, route.grade);
   if (free.length === 0) {
     host.remove();
     return;
@@ -3165,33 +3315,14 @@ async function renderKayaLink(route: Route, rerender: () => void): Promise<void>
 
   host.innerHTML = `<div class="section-head"><h3>KAYA climb</h3></div>
     <p class="hint">Same colour and grade can repeat on a wall, so check the set date.</p>
-    <input id="kaya-search" placeholder="filter by wall, grade or colour" />
+    <input id="kaya-search" aria-label="Filter KAYA climbs" placeholder="filter by wall, grade or colour" />
     <ul class="kaya-options" id="kaya-options"></ul>`;
 
   const list = document.getElementById('kaya-options') as HTMLUListElement;
   const search = document.getElementById('kaya-search') as HTMLInputElement;
 
   const draw = () => {
-    const q = search.value.trim().toLowerCase();
-    const hits = free
-      .filter((e) => !q || `${e.wall} ${e.grade} ${e.color}`.toLowerCase().includes(q))
-      // Most recently set first: a climb you're logging today is likely a new one.
-      .sort((a, b) => b.source_updated_at.localeCompare(a.source_updated_at))
-      .slice(0, 40);
-    list.innerHTML =
-      hits
-        .map(
-          (e) => `<li>
-            <button class="kaya-option" data-pick="${esc(e.id)}">
-              <span class="tape" style="background:${colorHex(e.color)}"></span>
-              <span class="kaya-option-body">
-                <strong>${esc([e.grade, e.color].filter(Boolean).join(' · '))}</strong>
-                <span class="catalog-row-meta">${esc([e.wall, setDateLabel(e)].filter(Boolean).join(' · '))}</span>
-              </span>
-            </button>
-          </li>`
-        )
-        .join('') || '<li class="empty">No climbs match.</li>';
+    list.innerHTML = kayaOptionRows(free, search.value);
 
     list.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((btn) =>
       btn.addEventListener('click', async () => {

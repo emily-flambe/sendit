@@ -978,6 +978,18 @@ input[type='radio'] {
   cursor: pointer;
 }
 
+.kaya-option.active {
+  border-color: var(--chalk);
+  background: var(--panel-2);
+  box-shadow: inset 3px 0 var(--green);
+}
+
+.kaya-selection {
+  margin-top: 6px;
+  color: var(--chalk-dim);
+  font-size: 14px;
+}
+
 .kaya-option .tape {
   height: 26px;
 }
